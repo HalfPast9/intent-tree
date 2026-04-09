@@ -15,14 +15,14 @@ The framework emulates this process. It is general-purpose — applicable to any
 
 ## 2. Core Concept
 
-The system operates on a **tree of subsystem nodes**. Each node represents a unit of solution responsibility. Nodes decompose into child nodes (vertical), and nodes at the same level connect via interface contracts (horizontal edges).
+The system operates on a **DAG of subsystem nodes** (directed acyclic graph — nodes can have multiple parents). Each node represents a unit of solution responsibility. Nodes decompose into child nodes (vertical), and nodes at the same level connect via interface contracts (horizontal edges).
 
-The tree is not built in one shot. It is constructed layer by layer, with each layer validated before the next is started. Validation has two dimensions:
+The architecture is not built in one shot. It is constructed layer by layer, with each layer validated before the next is started. Validation has two dimensions:
 
 - **Horizontal** — do the nodes at this layer cohere with each other? Are their interface contracts well-defined?
-- **Vertical** — do the nodes at this layer correctly and completely decompose their parent?
+- **Vertical** — do the nodes at this layer correctly and completely decompose their parent(s)?
 
-The end state is a fully locked tree where every node is well-defined, every edge is a clear contract, and every layer provably serves the one above it. This locked tree is the artifact — it gets handed to an implementation agent (e.g. Claude Code, Copilot) for execution.
+The end state is a fully locked architecture where every node is well-defined, every edge is a clear contract, and every layer provably serves the one above it. This locked architecture is the artifact — it gets handed to an implementation agent (e.g. Claude Code, Copilot) for execution.
 
 ---
 
@@ -33,14 +33,14 @@ The framework operates in three sequential phases. Transitions are not open-ende
 | Phase | Name | Purpose | Exit Gate |
 |-------|------|---------|-----------|
 | 1 | Problem Space Definition | Define the problem, constraints, and optimization targets collaboratively with the user | All 8 required fields populated + LLM conflict check + human sign-off |
-| 2 | Architecture | Construct the Intent Tree layer by layer, validate each layer before descending | All layers locked + syntax valid + human sign-off |
+| 2 | Architecture | Construct the Intent Tree architecture layer by layer, validate each layer before descending | All layers locked + syntax valid + human sign-off |
 | 3 | Implementation | Handoff to external coding agent | **Deferred — not in V1** |
 
 ### Phase transitions
 
 **Phase 1 → Phase 2:** Lightweight — the problem space doc is human-readable. LLM checks all required fields are populated and surfaces any detected conflicts between constraints, NFRs, and optimization targets. Human does final sign-off.
 
-**Within Phase 2:** Heavier — tree state is too complex for a human to verify at each step. Automated loop with structured human touchpoints (see Section 6).
+**Within Phase 2:** Heavier — architecture state is too complex for a human to verify at each step. Automated loop with structured human touchpoints (see Section 6).
 
 **Phase 2 → Phase 3:** All layers locked, syntax checker passed, human signs off.
 
@@ -52,7 +52,7 @@ The framework operates in three sequential phases. Transitions are not open-ende
 
 ### 4.1 Phase 1 Output — Problem Space Spec
 
-Phase 1 produces a **structured document, not a graph**. It sits above the tree and becomes the root inherited context for every node and every LLM call. It is never a node itself.
+Phase 1 produces a **structured document, not a graph**. It sits above the architecture and becomes the root inherited context for every node and every LLM call. It is never a node itself.
 
 Required fields:
 
@@ -74,7 +74,7 @@ Required fields:
 A node is a **subsystem** — a unit of solution responsibility. Not a task, not a step. Analogous to a component in a C4 diagram.
 
 - Nodes exist only in Phase 2. Phase 1 has no nodes.
-- A node has no output. The locked tree is the artifact.
+- A node has no output. The locked architecture is the artifact.
 - A leaf node is one at the bottom layer of the abstraction stack — no further decomposition is defined below it.
 - **A node can have multiple parents.** The vertical structure is a DAG, not a strict tree. Example: a PCB layout node might be a child of both mechanical design and IC selection — it must satisfy both parent intents simultaneously.
 
@@ -85,7 +85,7 @@ A node is a **subsystem** — a unit of solution responsibility. Not a task, not
 | `id` | Depth + human-readable slug — e.g. `L2-auth-service` |
 | `intent` | What this subsystem is responsible for delivering |
 | `state` | `pending` / `in_progress` / `locked` / `invalidated` |
-| `depth` | Layer position in the tree (root = 0) |
+| `depth` | Layer position in the architecture DAG (root = 0) |
 | `parents` | IDs of all parent nodes (one or more) |
 | `children` | IDs of child nodes (next layer down) |
 | `edges` | IDs of edges connecting this node to neighbours at the same depth |
@@ -117,21 +117,21 @@ An edge is an **interface contract between sibling subsystems** — not just a d
 
 ### 4.4 DAG Level
 
-A level is the set of sibling nodes produced by decomposing a single parent node. Levels do not have their own lock state — a level is considered locked when all its nodes are locked.
+A level is the set of all nodes at a given depth across the entire architecture. Levels do not have their own lock state — a level is considered locked when all its nodes are locked.
 
-### 4.5 Tree
+### 4.5 Architecture Graph
 
 - Root node = top-level architecture problem (depth 0)
-- Root inherited context = Phase 1 spec (not a parent node — there is none)
-- **Context assembly per LLM call:** Phase 1 spec + all parent nodes + siblings + edge-connected neighbours at the same depth. Resolved at call time, never stored.
+- Root inherited context = Phase 1 spec (not a parent node — there is none at depth 0)
+- **Context assembly per LLM call:** Phase 1 spec + all parent nodes + siblings at same depth + edge-connected neighbours at same depth. Resolved at call time, never stored.
 - **Neighbours = any node connected via an edge at the same layer depth** — not limited to siblings (same parent). Cross-parent edges are valid as long as both nodes are at the same depth.
-- **Multiple parents:** The vertical structure is a DAG, not a strict tree. A node can be a child of more than one parent and must satisfy all of them.
+- **Multiple parents:** The vertical structure is a DAG, not a strict tree. A node can be a child of more than one parent and must satisfy all of them simultaneously.
 
 ---
 
 ## 5. Abstraction Stack
 
-Before any decomposition begins in Phase 2, the LLM proposes an **abstraction stack** — the ordered list of conceptual layers the tree will pass through from root to leaf.
+Before any decomposition begins in Phase 2, the LLM proposes an **abstraction stack** — the ordered list of conceptual layers the architecture will pass through from root to leaf.
 
 Example for a web application: `System → Service → Module → Function`
 
@@ -166,7 +166,8 @@ START OF LAYER
 │
 ├─ 2. Generate layer criteria doc
 │       LLM generates a layer-specific criteria document from:
-│         - Parent node intent
+│         - All parent node(s) intent at this depth
+│         - Parent layer criteria doc (from the layer above)
 │         - Current abstraction stack position
 │         - Phase 1 spec
 │       This is a LAYER SPECIFICATION, not just a checklist. It defines:
@@ -212,9 +213,9 @@ START OF LAYER
 │         User confirms or overrides diagnosis.  ← HUMAN GATE
 │           - Confirmed implementation → retry
 │           - Confirmed design → UPWARD TRAVERSAL
-│               LLM identifies the origin node (can be anywhere from direct parent
-│               to Phase 1 spec). All nodes from origin downward are invalidated.
-│               Stack evolution check may trigger here too.
+│               LLM identifies the origin nodes (can be anywhere from direct parents
+│               to Phase 1 spec — multiple origins possible). All nodes from each
+│               origin downward are invalidated. Stack evolution check may trigger here too.
 │
 ├─ 5. Syntax checker (rule-based, no LLM, fully deterministic)
 │       Checks structural correctness — things the iteration loop can't self-report:
@@ -249,7 +250,7 @@ Each call type receives a different payload — purpose-built, not a generic dum
 
 **Decomposition call** (generate child nodes for a parent)
 - Format: natural language — this is a creative reasoning task
-- Contents: Phase 1 spec, parent node intent, abstraction stack with current position marked, layer criteria doc
+- Contents: Phase 1 spec, all parent node(s) intent, abstraction stack with current position marked, layer criteria doc
 
 **Validation call** (check node against checklist)
 - Format: structured — this is a comparison task, needs to be unambiguous
@@ -513,7 +514,7 @@ Returns:
 | LLM | Kimi K2.5 via Azure | Strong reasoning; covered by student credits |
 | Model routing | Single model for all call types in V1 | No premature optimization |
 | Storage | Neo4j graph DB (Docker or AuraDB free tier) | Purpose-built for graph traversal; no rewrite risk later |
-| State model | Full event sourcing | Every action stored as an immutable event — complete timeline of how the tree evolved and why |
+| State model | Full event sourcing | Every action stored as an immutable event — complete timeline of how the architecture evolved and why |
 | Language | TypeScript / JavaScript | Web UI required for C4 view; locks in JS ecosystem |
 | Human interface | Simple web UI (vibecoded) | C4 view requires web; editable as human escape hatch |
 | Graph library | TBD — decide at first implementation session | Likely `graphology` (JS) or custom lightweight implementation |
@@ -521,7 +522,7 @@ Returns:
 
 ### 8.1 Event Sourcing
 
-Every action in the system is stored as an immutable event node in Neo4j. Current tree state is derived from the event log. Rollback = rewind to any earlier event. The goal is a complete timeline — every event is logged, including silent passes, so there are no gaps in the audit trail.
+Every action in the system is stored as an immutable event node in Neo4j. Current architecture state is derived from the event log. Rollback = rewind to any earlier event. The goal is a complete timeline — every event is logged, including silent passes, so there are no gaps in the audit trail.
 
 **Base event schema:**
 
@@ -531,7 +532,7 @@ Every action in the system is stored as an immutable event node in Neo4j. Curren
 | `type` | string | Event type (see catalogue below) |
 | `timestamp` | datetime | When the event occurred |
 | `actor` | `"llm"` \| `"human"` | Who caused the event |
-| `node_ids` | string[] | IDs of tree nodes this event affects |
+| `node_ids` | string[] | IDs of architecture nodes this event affects |
 | `payload` | object | Typed per event type — each type has its own schema |
 
 **Neo4j structure:**
@@ -617,7 +618,7 @@ Every action in the system is stored as an immutable event node in Neo4j. Curren
 *Human override*
 | Event | Actor | Description |
 |-------|-------|-------------|
-| `human_override` | human | Human edited tree directly via C4 view — payload includes what changed |
+| `human_override` | human | Human edited architecture directly via C4 view — payload includes what changed |
 
 *Phase transition*
 | Event | Actor | Description |
@@ -630,7 +631,7 @@ Every action in the system is stored as an immutable event node in Neo4j. Curren
 
 - ✅ Phase 1 (Problem Space Definition) — full implementation
 - ✅ Phase 2 (Architecture) — full implementation including iteration loop, validation, upward traversal
-- ✅ Persistent tree with full event sourcing
+- ✅ Persistent architecture DAG with full event sourcing
 - ✅ Web UI with C4 export
 - ❌ Phase 3 (Implementation) — deferred, will be an agent handoff when built
 - ❌ Hypertree / parallel branch exploration — deferred to V2
@@ -665,7 +666,7 @@ Items 10.1–10.3 are best resolved during implementation once the full system i
 | 2026-04-09 | Phase 1 produces a structured spec document, not a graph |
 | 2026-04-09 | A node is a subsystem — analogous to a C4 component |
 | 2026-04-09 | An edge is an interface contract, not just a dependency link |
-| 2026-04-09 | Nodes have no output — the locked tree is the artifact |
+| 2026-04-09 | Nodes have no output — the locked architecture is the artifact |
 | 2026-04-09 | Context resolved at call time, not stored in nodes |
 | 2026-04-09 | Nodes can have multiple parents — vertical structure is a DAG, not a strict tree |
 | 2026-04-09 | Neighbours = any node connected via edge at same depth — cross-parent edges valid, cross-layer edges forbidden |
