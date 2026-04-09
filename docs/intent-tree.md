@@ -541,7 +541,7 @@ Every action in the system is stored as an immutable event node in Neo4j. Curren
 - `(:Event)-[:FOLLOWS]->(:Event)` — sequential chain for timeline reconstruction
 
 **Example queries:**
-- Full history of a node: `MATCH (e:Event)-[:AFFECTS]->(n:Node {id: 'L2-auth-service'}) RETURN e ORDER BY e.timestamp`
+- Full history of a node: `MATCH (e:Event)-[:AFFECTS]->(n:ArchNode {id: 'L2-auth-service'}) RETURN e ORDER BY e.timestamp`
 - Full system timeline: `MATCH (e:Event) RETURN e ORDER BY e.timestamp`
 - All validation failures: `MATCH (e:Event {type: 'node_validation_failed'}) RETURN e`
 
