@@ -33,7 +33,8 @@ export async function createEvent(data: EventCreateInput): Promise<EventRecord> 
         CALL {
           WITH ev, nodeIds
           UNWIND nodeIds AS nodeId
-          MATCH (n:ArchNode {id: nodeId})
+          MATCH (n {id: nodeId})
+          WHERE n:ArchNode OR n:ProblemSpec OR n:Session OR n:AbstractionStack OR n:LayerCriteriaDoc OR n:NodeChecklistDraft
           MERGE (ev)-[:AFFECTS]->(n)
           RETURN count(*) AS affectLinks
         }
@@ -92,7 +93,8 @@ export async function getEventHistory(nodeId: string): Promise<EventRecord[]> {
     const result = await session.executeRead((tx) =>
       tx.run(
         `
-        MATCH (ev:Event)-[:AFFECTS]->(n:ArchNode {id: $nodeId})
+        MATCH (ev:Event)-[:AFFECTS]->(n {id: $nodeId})
+        WHERE n:ArchNode OR n:ProblemSpec OR n:Session OR n:AbstractionStack OR n:LayerCriteriaDoc OR n:NodeChecklistDraft
         RETURN ev
         ORDER BY ev.timestamp ASC, ev.id ASC
         `,
