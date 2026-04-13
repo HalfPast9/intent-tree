@@ -524,7 +524,7 @@
         const startedAt = performance.now();
         addActivity(`API start: ${label}`);
         const res = await fetch(url, options);
-        const data = await res.json();
+        const body = await res.json();
         const duration = Math.round(performance.now() - startedAt);
 
         if (res.ok) {
@@ -533,7 +533,21 @@
           addActivity(`API error: ${label} (${duration}ms)`, "error");
         }
 
-        return { res, data, duration };
+        return { res, body, duration };
+      }
+
+      function unwrapEnvelope(call, fallbackMessage) {
+        const { res, body } = call;
+
+        if (!res.ok || !body?.ok) {
+          const errorMessage = body?.error?.message || fallbackMessage;
+          throw new Error(errorMessage);
+        }
+
+        return {
+          data: body.data || {},
+          llm_raw: body.llm_raw || null
+        };
       }
 
       function renderSpec() {
@@ -741,16 +755,29 @@
 
         await runTask("Loading Phase 2 stack", async () => {
           const stackCall = await apiFetch("/api/phase2/stack", {}, "phase2 stack");
-          const stackRes = stackCall.res;
-          const stackData = stackCall.data;
+          const { data: stackData } = unwrapEnvelope(stackCall, "Failed to load stack");
 
-          if (!stackRes.ok) {
-            throw new Error(stackData.error || "Failed to load stack");
+          if (!stackData.stack) {
+            const proposeCall = await apiFetch("/api/phase2/stack/propose", { method: "POST" }, "phase2 stack propose");
+            const proposed = unwrapEnvelope(proposeCall, "Failed to propose stack");
+            phase2State.stack = proposed.data.stack;
+            phase2State.depth = Number(proposed.data.session?.current_depth ?? 0);
+          } else {
+            phase2State.stack = stackData.stack;
+            phase2State.depth = Number(stackData.session?.current_depth ?? 0);
           }
 
-          phase2State.stack = stackData.stack;
-          phase2State.depth = Number(stackData.session?.current_depth ?? 0);
-          phase2State.stackEvolutionProposal = stackData.stack_evolution_proposal || null;
+          const evolutionCall = await apiFetch(
+            "/api/phase2/stack/evolution/check",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ depth: phase2State.depth })
+            },
+            `phase2 stack check evolution depth ${phase2State.depth}`
+          );
+          const evolution = unwrapEnvelope(evolutionCall, "Failed to check stack evolution");
+          phase2State.stackEvolutionProposal = evolution.data.stack_evolution_proposal || null;
 
           if (phase2State.stackEvolutionProposal) {
             phase2State.criteria = null;
@@ -761,24 +788,22 @@
           }
 
           setStatus("busy", "Working", "Generating/loading criteria document");
-          const criteriaCall = await apiFetch(`/api/phase2/layer/${phase2State.depth}/criteria`, {}, `criteria depth ${phase2State.depth}`);
-          const criteriaRes = criteriaCall.res;
-          const criteriaData = criteriaCall.data;
-
-          if (!criteriaRes.ok) {
-            throw new Error(criteriaData.error || "Failed to load criteria");
-          }
+          const criteriaCall = await apiFetch(
+            `/api/phase2/layer/${phase2State.depth}/criteria/generate`,
+            { method: "POST" },
+            `criteria depth ${phase2State.depth}`
+          );
+          const { data: criteriaData } = unwrapEnvelope(criteriaCall, "Failed to load criteria");
 
           phase2State.criteria = criteriaData.criteria;
 
           setStatus("busy", "Working", "Generating/loading nodes and checklists");
-          const nodesCall = await apiFetch(`/api/phase2/layer/${phase2State.depth}/nodes`, {}, `nodes depth ${phase2State.depth}`);
-          const nodesRes = nodesCall.res;
-          const nodesData = nodesCall.data;
-
-          if (!nodesRes.ok) {
-            throw new Error(nodesData.error || "Failed to load nodes");
-          }
+          const nodesCall = await apiFetch(
+            `/api/phase2/layer/${phase2State.depth}/nodes/propose`,
+            { method: "POST" },
+            `nodes depth ${phase2State.depth}`
+          );
+          const { data: nodesData } = unwrapEnvelope(nodesCall, "Failed to load nodes");
 
           phase2State.nodes = Array.isArray(nodesData.nodes) ? nodesData.nodes : [];
           renderPhase2();
@@ -787,12 +812,7 @@
 
       async function loadSpec() {
         const call = await apiFetch("/api/phase1/spec", {}, "phase1 spec");
-        const res = call.res;
-        const data = call.data;
-
-        if (!res.ok) {
-          throw new Error(data.error || "Failed to load spec");
-        }
+        const { data } = unwrapEnvelope(call, "Failed to load spec");
 
         state.spec = data.spec;
         renderSpec();
@@ -809,12 +829,7 @@
 
       async function runConflictCheck() {
         const call = await apiFetch("/api/phase1/conflict-check", { method: "POST" }, "phase1 conflict check");
-        const res = call.res;
-        const data = call.data;
-
-        if (!res.ok) {
-          throw new Error(data.error || "Conflict check failed");
-        }
+        const { data } = unwrapEnvelope(call, "Conflict check failed");
 
         state.spec = data.spec;
         state.clean = Boolean(data.clean);
@@ -839,13 +854,7 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ message })
             }, "phase1 message");
-
-            const res = call.res;
-            const data = call.data;
-
-            if (!res.ok) {
-              throw new Error(data.error || "Request failed");
-            }
+            const { data } = unwrapEnvelope(call, "Request failed");
 
             appendMessage("assistant", data.message);
             state.spec = data.spec;
@@ -874,12 +883,7 @@
         try {
           await runTask("Locking Phase 1 and transitioning", async () => {
             const call = await apiFetch("/api/phase1/lock", { method: "POST" }, "phase1 lock");
-            const res = call.res;
-            const data = call.data;
-
-            if (!res.ok) {
-              throw new Error(data.error || "Could not lock Phase 1");
-            }
+            const { data } = unwrapEnvelope(call, "Could not lock Phase 1");
 
             state.spec = data.spec;
             renderSpec();
@@ -906,12 +910,7 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ layers })
             }, "phase2 stack approve");
-            const res = call.res;
-            const data = call.data;
-
-            if (!res.ok) {
-              throw new Error(data.error || "Failed to approve stack");
-            }
+            const { data } = unwrapEnvelope(call, "Failed to approve stack");
 
             phase2State.stack = { ...data.stack, layers: data.layers };
             renderPhase2();
@@ -935,12 +934,7 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ depth: phase2State.depth, proposed_stack })
             }, "phase2 stack evolution approve");
-            const res = call.res;
-            const data = call.data;
-
-            if (!res.ok) {
-              throw new Error(data.error || "Failed to approve stack evolution");
-            }
+            const { data } = unwrapEnvelope(call, "Failed to approve stack evolution");
 
             phase2State.stack = { ...data.stack, layers: data.layers };
             phase2State.stackEvolutionProposal = null;
@@ -965,12 +959,7 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(edits)
             }, `phase2 criteria approve depth ${phase2State.depth}`);
-            const res = call.res;
-            const data = call.data;
-
-            if (!res.ok) {
-              throw new Error(data.error || "Failed to approve criteria");
-            }
+            const { data } = unwrapEnvelope(call, "Failed to approve criteria");
 
             phase2State.criteria = data.criteria;
             renderPhase2();
@@ -990,12 +979,7 @@
             const call = await apiFetch(`/api/phase2/layer/${phase2State.depth}/nodes/approve`, {
               method: "POST"
             }, `phase2 nodes approve depth ${phase2State.depth}`);
-            const res = call.res;
-            const data = call.data;
-
-            if (!res.ok) {
-              throw new Error(data.error || "Failed to approve nodes");
-            }
+            unwrapEnvelope(call, "Failed to approve nodes");
 
             appendMessage("assistant", "Node proposals and checklists approved.");
           });

@@ -6,7 +6,13 @@ import {
   getProblemSpecById,
   updateProblemSpec
 } from "../db/index.js";
-import { callLLM, callLLMWithMessages, LLMMessage } from "../llm/client.js";
+import {
+  callLLM,
+  callLLMWithMessages,
+  getLLMRawLogLength,
+  getLLMRawSince,
+  LLMMessage
+} from "../llm/client.js";
 import { EventActor } from "../models/event.js";
 import { ProblemSpec } from "../models/problemSpec.js";
 import { transitionSessionToPhase2 } from "../phase2/service.js";
@@ -23,7 +29,7 @@ import {
   Phase1SpecField
 } from "./prompts.js";
 
-const PHASE1_SPEC_ID = "phase1-spec";
+const PHASE1_SPEC_ID = "spec-url-shortener";
 
 const DEFAULT_SPEC: ProblemSpec = {
   id: PHASE1_SPEC_ID,
@@ -179,7 +185,11 @@ async function applySpecUpdate(
   return updated;
 }
 
-export async function runConflictCheck(): Promise<{ spec: ProblemSpec; result: Prompt2Response }> {
+export async function runConflictCheck(): Promise<{
+  spec: ProblemSpec;
+  result: Prompt2Response;
+  llm_raw: string | null;
+}> {
   const spec = await getOrCreatePhase1Spec();
 
   if (!isPhase1SpecComplete(spec)) {
@@ -188,14 +198,17 @@ export async function runConflictCheck(): Promise<{ spec: ProblemSpec; result: P
       result: {
         clean: false,
         conflicts: []
-      }
+      },
+      llm_raw: null
     };
   }
 
   const prompt = buildPrompt2(spec);
+  const rawLogStart = getLLMRawLogLength();
   const raw = await callLLM<Record<string, unknown>>(prompt, {
     systemPrompt: "Return only strict JSON for Prompt 2 conflict check."
   });
+  const llmRaw = getLLMRawSince(rawLogStart)[0] ?? null;
   const result = validatePrompt2Response(raw);
 
   const currentKeys = new Set<string>();
@@ -224,7 +237,7 @@ export async function runConflictCheck(): Promise<{ spec: ProblemSpec; result: P
     activeConflicts.add(key);
   }
 
-  return { spec, result };
+  return { spec, result, llm_raw: llmRaw };
 }
 
 export async function processUserMessage(userMessage: string): Promise<{
@@ -232,6 +245,7 @@ export async function processUserMessage(userMessage: string): Promise<{
   spec: ProblemSpec;
   clean: boolean;
   conflicts: Prompt2Conflict[];
+  llm_raw: string | null;
 }> {
   const currentSpec = await getOrCreatePhase1Spec();
 
@@ -246,9 +260,11 @@ export async function processUserMessage(userMessage: string): Promise<{
     { role: "user", content: prompt }
   ];
 
+  const rawLogStart = getLLMRawLogLength();
   const raw = await callLLMWithMessages<Record<string, unknown>>(messages, {
     temperature: 0.2
   });
+  const prompt1Raw = getLLMRawSince(rawLogStart)[0] ?? null;
   const llmResponse = validatePrompt1Response(raw);
 
   const updatedSpec = await applySpecUpdate(currentSpec, llmResponse.spec_update, "llm");
@@ -261,7 +277,8 @@ export async function processUserMessage(userMessage: string): Promise<{
       message: llmResponse.message,
       spec: updatedSpec,
       clean: false,
-      conflicts: []
+      conflicts: [],
+      llm_raw: prompt1Raw
     };
   }
 
@@ -271,7 +288,8 @@ export async function processUserMessage(userMessage: string): Promise<{
     message: llmResponse.message,
     spec: (await getOrCreatePhase1Spec()),
     clean: result.clean,
-    conflicts: result.conflicts
+    conflicts: result.conflicts,
+    llm_raw: prompt1Raw
   };
 }
 

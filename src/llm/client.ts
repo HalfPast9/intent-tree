@@ -28,6 +28,29 @@ const client = new OpenAI({
   defaultQuery: { "api-version": "2024-05-01-preview" }
 });
 
+const rawResponseLog: string[] = [];
+
+function recordRawResponse(raw: string): void {
+  rawResponseLog.push(raw);
+
+  // Keep bounded history to avoid unbounded memory growth.
+  if (rawResponseLog.length > 200) {
+    rawResponseLog.splice(0, rawResponseLog.length - 200);
+  }
+}
+
+export function getLLMRawLogLength(): number {
+  return rawResponseLog.length;
+}
+
+export function getLLMRawSince(index: number): string[] {
+  if (index < 0 || index >= rawResponseLog.length) {
+    return index < 0 ? [...rawResponseLog] : [];
+  }
+
+  return rawResponseLog.slice(index);
+}
+
 function extractTextContent(content: OpenAI.Chat.Completions.ChatCompletionMessageParam["content"] | OpenAI.Chat.Completions.ChatCompletion["choices"][number]["message"]["content"]): string {
   if (typeof content === "string") {
     return content;
@@ -65,10 +88,10 @@ export async function callLLM<T extends Record<string, unknown>>(
   return callLLMWithMessages<T>(messages, { temperature: options.temperature });
 }
 
-export async function callLLMWithMessages<T extends Record<string, unknown>>(
+export async function callLLMWithMessagesRaw<T extends Record<string, unknown>>(
   messages: LLMMessage[],
   options: { temperature?: number } = {}
-): Promise<T> {
+): Promise<{ parsed: T; raw: string }> {
   const response = await client.chat.completions.create({
     model: env.AZURE_KIMI_MODEL,
     temperature: options.temperature ?? 0.2,
@@ -77,6 +100,7 @@ export async function callLLMWithMessages<T extends Record<string, unknown>>(
   });
 
   const raw = extractTextContent(response.choices[0]?.message?.content);
+  recordRawResponse(raw);
 
   if (!raw) {
     throw new LLMResponseParseError("LLM response content was empty.", raw);
@@ -89,7 +113,7 @@ export async function callLLMWithMessages<T extends Record<string, unknown>>(
       throw new LLMResponseParseError("LLM response must be a JSON object.", raw);
     }
 
-    return parsed as T;
+    return { parsed: parsed as T, raw };
   } catch (error) {
     if (error instanceof LLMResponseParseError) {
       throw error;
@@ -97,4 +121,12 @@ export async function callLLMWithMessages<T extends Record<string, unknown>>(
 
     throw new LLMResponseParseError("Failed to parse LLM response as JSON.", raw);
   }
+}
+
+export async function callLLMWithMessages<T extends Record<string, unknown>>(
+  messages: LLMMessage[],
+  options: { temperature?: number } = {}
+): Promise<T> {
+  const result = await callLLMWithMessagesRaw<T>(messages, options);
+  return result.parsed;
 }
