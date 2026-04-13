@@ -631,6 +631,8 @@ Every action in the system is stored as an immutable event node in Neo4j. Curren
 
 The REST API is a first-class interface — not just a backend for the UI. It must be independently usable for automated testing, debugging individual steps, and future integrations.
 
+Practical request/response examples are documented in `docs/api.md`.
+
 ### 9.1 Design principles
 
 - **Every step individually callable** — each LLM call, validation step, and state transition has its own endpoint. Nothing is bundled together in a way that forces you to run the full flow to reach a specific step.
