@@ -627,19 +627,117 @@ Every action in the system is stored as an immutable event node in Neo4j. Curren
 
 ---
 
-## 9. V1 Scope
+## 9. API Design
+
+The REST API is a first-class interface — not just a backend for the UI. It must be independently usable for automated testing, debugging individual steps, and future integrations.
+
+### 9.1 Design principles
+
+- **Every step individually callable** — each LLM call, validation step, and state transition has its own endpoint. Nothing is bundled together in a way that forces you to run the full flow to reach a specific step.
+- **Raw LLM output always accessible** — every endpoint that calls the LLM returns both the processed result and the raw LLM response. This makes prompt debugging possible without log-diving.
+- **State fully inspectable** — dedicated read endpoints for every piece of system state: current spec, current stack, nodes at any depth, event history for any node, full timeline.
+- **No UI dependency** — the API works correctly without a browser. All human gates are implemented as explicit POST endpoints, not implicit UI state.
+
+### 9.2 Phase 1 endpoints
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `GET` | `/api/phase1/spec` | Current ProblemSpec state |
+| `POST` | `/api/phase1/message` | Send user message, run Prompt 1, return LLM reply + spec update |
+| `POST` | `/api/phase1/conflict-check` | Run Prompt 2, return conflict results + raw LLM output |
+| `POST` | `/api/phase1/lock` | Lock Phase 1, emit events |
+
+### 9.3 Phase 2 — Stack endpoints
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `GET` | `/api/phase2/stack` | Current abstraction stack |
+| `POST` | `/api/phase2/stack/propose` | Run Prompt 3, return proposed stack + reasoning + raw LLM output |
+| `POST` | `/api/phase2/stack/approve` | Approve or edit+approve proposed stack |
+| `POST` | `/api/phase2/stack/evolution/check` | Run Prompt 4 for given depth, return result + raw LLM output |
+| `POST` | `/api/phase2/stack/evolution/approve` | Approve or edit+approve a proposed stack evolution |
+
+### 9.4 Phase 2 — Layer endpoints
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `GET` | `/api/phase2/layer/:depth/criteria` | Layer criteria doc for given depth |
+| `POST` | `/api/phase2/layer/:depth/criteria/generate` | Run Prompt 5, return criteria doc + raw LLM output |
+| `POST` | `/api/phase2/layer/:depth/criteria/approve` | Approve or edit+approve criteria doc |
+| `GET` | `/api/phase2/layer/:depth/nodes` | All nodes at given depth |
+| `POST` | `/api/phase2/layer/:depth/nodes/propose` | Run Prompt 6, return proposed nodes + checklists + raw LLM output |
+| `POST` | `/api/phase2/layer/:depth/nodes/approve` | User confirms proposed nodes and checklists |
+
+### 9.5 Phase 2 — Validation endpoints
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `POST` | `/api/phase2/layer/:depth/validate/node/:nodeId` | Run Prompt 7 on a single node, return checklist results + raw LLM output |
+| `POST` | `/api/phase2/layer/:depth/validate/collective` | Run Prompt 8 collective vertical check, return coverage + overlap results + raw LLM output |
+| `POST` | `/api/phase2/layer/:depth/validate/syntax` | Run syntax checker (rule-based), return structural errors |
+| `POST` | `/api/phase2/layer/:depth/lock` | Lock layer after all validation passes |
+
+### 9.6 Phase 2 — Failure handling endpoints
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `POST` | `/api/phase2/diagnose/:nodeId` | Run Prompt 9 failure diagnosis, return classification + origin nodes + raw LLM output |
+| `POST` | `/api/phase2/diagnose/:nodeId/confirm` | Human confirms or overrides diagnosis |
+| `POST` | `/api/phase2/traverse/upward` | Trigger upward traversal from given origin nodes, invalidate affected nodes |
+
+### 9.7 State inspection endpoints
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `GET` | `/api/state/session` | Current session state (phase, depth, stack id) |
+| `GET` | `/api/state/timeline` | Full event timeline ordered by timestamp |
+| `GET` | `/api/state/node/:nodeId/history` | Full event history for a specific node |
+| `GET` | `/api/state/nodes/pending` | All nodes currently in `pending` state |
+| `GET` | `/api/state/nodes/invalidated` | All nodes currently in `invalidated` state |
+| `GET` | `/api/state/layer/:depth/status` | Lock state + node states for a given depth |
+
+### 9.8 Dev utilities
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `POST` | `/api/dev/reset` | Wipe all application data (dev only — disabled in production) |
+| `POST` | `/api/dev/seed` | Seed Phase 1 URL shortener spec and transition to Phase 2 (dev only) |
+
+### 9.9 Response envelope
+
+All endpoints return a consistent response shape:
+
+```json
+{
+  "ok": true,
+  "data": {},
+  "llm_raw": null
+}
+```
+
+- `ok` — boolean, false on error
+- `data` — the processed result for this endpoint
+- `llm_raw` — the raw LLM response string if this endpoint called the LLM, otherwise null
+- On error: `{ "ok": false, "error": "message" }`
+
+---
+
+
+
+## 10. V1 Scope
 
 - ✅ Phase 1 (Problem Space Definition) — full implementation
 - ✅ Phase 2 (Architecture) — full implementation including iteration loop, validation, upward traversal
 - ✅ Persistent architecture DAG with full event sourcing
 - ✅ Web UI with C4 export
+- ✅ REST API as first-class interface (spec Section 9)
 - ❌ Phase 3 (Implementation) — deferred, will be an agent handoff when built
 - ❌ Hypertree / parallel branch exploration — deferred to V2
-- ❓ End-to-end V1 demo problem — to be defined
+- ✅ Demo problem: URL shortener (seed script in dev utilities)
 
 ---
 
-## 10. Open Questions
+## 11. Open Questions
 
 These are the only remaining unresolved items as of last update:
 
@@ -648,7 +746,6 @@ These are the only remaining unresolved items as of last update:
 | 10.1 | Additional syntax checker structural rules beyond the 6 defined | Section 6, step 5 |
 | 10.2 | Exact prompt text for all 9 prompts — structure defined, wording to be written and refined during implementation | Section 7.3 |
 | 10.3 | Prompt versioning — do we track prompts as part of the system? | Section 7 |
-| 10.4 | End-to-end V1 demo problem | Section 9 |
 | 10.5 | Graph library choice (graphology vs custom) | Section 8 |
 | 10.6 | LLM SDK (direct Azure REST vs OpenAI-compatible) | Section 8 |
 | 10.7 | Node creation — how are shared nodes (multiple parents) proposed, recognized, and claimed during decomposition? | Section 4.2 |
