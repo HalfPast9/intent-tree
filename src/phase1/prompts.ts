@@ -63,7 +63,8 @@ export function isPhase1SpecComplete(spec: ProblemSpec): boolean {
 
 export function buildPrompt1(
   spec: ProblemSpec,
-  userMessage: string
+  userMessage: string,
+  currentConflicts: Prompt2Conflict[]
 ): string {
   const emptyFields = getEmptyFields(spec);
 
@@ -86,6 +87,9 @@ export function buildPrompt1(
     "",
     "Currently empty fields:",
     JSON.stringify(emptyFields, null, 2),
+    "",
+    "Current unresolved conflicts (from latest conflict check):",
+    JSON.stringify(currentConflicts, null, 2),
     "",
     "Latest user message:",
     userMessage

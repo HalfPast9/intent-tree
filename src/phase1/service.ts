@@ -40,6 +40,7 @@ const DEFAULT_SPEC: ProblemSpec = {
 
 const chatHistory: ChatTurn[] = [];
 const activeConflicts = new Set<string>();
+let latestConflicts: Prompt2Conflict[] = [];
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -183,6 +184,7 @@ export async function runConflictCheck(): Promise<{ spec: ProblemSpec; result: P
   const spec = await getOrCreatePhase1Spec();
 
   if (!isPhase1SpecComplete(spec)) {
+    latestConflicts = [];
     return {
       spec,
       result: {
@@ -197,6 +199,7 @@ export async function runConflictCheck(): Promise<{ spec: ProblemSpec; result: P
     systemPrompt: "Return only strict JSON for Prompt 2 conflict check."
   });
   const result = validatePrompt2Response(raw);
+  latestConflicts = result.conflicts;
 
   const currentKeys = new Set<string>();
 
@@ -239,7 +242,7 @@ export async function processUserMessage(userMessage: string): Promise<{
     throw new Error("Phase 1 is locked and read-only.");
   }
 
-  const prompt = buildPrompt1(currentSpec, userMessage);
+  const prompt = buildPrompt1(currentSpec, userMessage, latestConflicts);
   const messages: LLMMessage[] = [
     { role: "system", content: buildPrompt1SystemPrompt() },
     ...chatHistory,

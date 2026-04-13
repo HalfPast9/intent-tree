@@ -1,10 +1,11 @@
-import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { createEvent, createProblemSpec, createSession } from "../src/db/index";
+import { createProblemSpec } from "../src/db/index";
 import { connectNeo4j, disconnectNeo4j } from "../src/db/client";
 import { resetDb } from "./reset-db";
 
-const problemSpec = {
+export const problemSpec = {
   id: "spec-url-shortener",
   problem_statement:
     "Build a URL shortening service that accepts arbitrary long URLs submitted via an HTTP API, generates a short alphanumeric code uniquely mapped to that URL, persists the mapping durably, and redirects any HTTP client that resolves the short code to the original destination URL via an HTTP 301 or 302 response. The service is the authoritative source of truth for all short code -> URL mappings and must never lose or corrupt a mapping once written.",
@@ -60,22 +61,10 @@ const problemSpec = {
 - Deployability: Zero-downtime deployments for application tier. Database migrations must be backward-compatible with the running version during rollout.`,
   existing_context:
     "None - this is a fully greenfield system with no legacy infrastructure, no existing tech stack, no pre-existing integrations, and no migration constraints. All architectural decisions are unconstrained by prior choices.",
-  locked: true
+  locked: false
 } as const;
 
-const session = {
-  id: "session-default",
-  current_phase: "phase2",
-  current_depth: null,
-  problem_spec_id: "spec-url-shortener",
-  stack_id: null
-} as const;
-
-function eventTimestamp(offsetMs: number): string {
-  return new Date(Date.now() + offsetMs).toISOString();
-}
-
-async function seedPhase1(): Promise<void> {
+export async function seedPhase1(): Promise<void> {
   console.warn("WARNING: Dev only. Do not run in production.");
 
   await resetDb();
@@ -84,51 +73,20 @@ async function seedPhase1(): Promise<void> {
 
   try {
     await createProblemSpec(problemSpec);
-    await createSession(session);
 
-    await createEvent({
-      id: randomUUID(),
-      type: "spec_field_updated",
-      timestamp: eventTimestamp(1),
-      actor: "human",
-      node_ids: ["spec-url-shortener"],
-      payload: JSON.stringify({ field: "all", note: "seeded" })
-    });
-
-    await createEvent({
-      id: randomUUID(),
-      type: "conflict_detected",
-      timestamp: eventTimestamp(2),
-      actor: "llm",
-      node_ids: ["spec-url-shortener"],
-      payload: JSON.stringify({ conflicts: [] })
-    });
-
-    await createEvent({
-      id: randomUUID(),
-      type: "phase1_locked",
-      timestamp: eventTimestamp(3),
-      actor: "human",
-      node_ids: ["spec-url-shortener"],
-      payload: JSON.stringify({})
-    });
-
-    await createEvent({
-      id: randomUUID(),
-      type: "phase_transitioned",
-      timestamp: eventTimestamp(4),
-      actor: "human",
-      node_ids: ["session-default"],
-      payload: JSON.stringify({ from: "phase1", to: "phase2" })
-    });
-
-    console.log("Seed complete: locked Phase 1 spec and phase2 session created.");
+    console.log("Seed complete: unlocked ProblemSpec created.");
   } finally {
     await disconnectNeo4j();
   }
 }
 
-seedPhase1().catch((error) => {
-  console.error("Failed to seed Phase 1:", error);
-  process.exitCode = 1;
-});
+const isMain =
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMain) {
+  seedPhase1().catch((error) => {
+    console.error("Failed to seed Phase 1:", error);
+    process.exitCode = 1;
+  });
+}

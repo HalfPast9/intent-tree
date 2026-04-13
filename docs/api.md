@@ -42,6 +42,13 @@ curl -s -X POST http://localhost:3000/api/phase1/message \
   -d '{"message":"We need a URL shortener with sub-50ms redirect latency."}' | jq
 ```
 
+Prompt 1 context currently includes:
+
+- Full current Phase 1 spec fields
+- List of currently empty fields
+- Latest unresolved conflicts from the most recent conflict check
+- Latest user message
+
 Sample success payload (`data`):
 
 ```json
@@ -63,6 +70,8 @@ Sample success payload (`data`):
 ```bash
 curl -s -X POST http://localhost:3000/api/phase1/conflict-check | jq
 ```
+
+This endpoint also refreshes the in-memory unresolved-conflicts snapshot that Prompt 1 receives on subsequent `/api/phase1/message` calls.
 
 ### Lock Phase 1
 
@@ -201,6 +210,15 @@ curl -s -X POST http://localhost:3000/api/dev/reset | jq
 ```bash
 curl -s -X POST http://localhost:3000/api/dev/seed | jq
 ```
+
+This `api/dev/seed` endpoint seeds a locked Phase 1 + phase2 session baseline for maintenance/demo flows.
+
+### Script-based local seeding
+
+Script commands in `package.json` currently behave as follows:
+
+- `npm run db:seed`: resets DB and seeds only the `ProblemSpec` (unlocked)
+- `npm run phase1skip`: currently same behavior as `db:seed` (spec-only, unlocked)
 
 ## Quick smoke flow
 

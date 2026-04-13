@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "db:reset": "tsx scripts/reset-db.ts",
     "db:seed": "tsx scripts/seed-phase1.ts",
-    "db:fresh": "npm run db:reset && npm run db:seed"
+    "db:fresh": "npm run db:reset && npm run db:seed",
+    "phase1skip": "tsx scripts/phase1skip.ts"
   },
   "engines": {
     "node": ">=20"

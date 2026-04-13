@@ -273,6 +273,7 @@ Role: collaborative — LLM leads with structure but adapts to how the user comm
 Receives (per turn):
 - The 8 required field schemas
 - Current spec doc state (what's filled, what isn't)
+- Latest unresolved conflicts from the most recent Prompt 2 run (if any)
 - Conversation history
 
 Returns (per turn):
@@ -802,3 +803,4 @@ Items 10.1–10.3 are best resolved during implementation once the full system i
 | 2026-04-09 | Node ID = depth + human-readable slug (e.g. L2-auth-service) |
 | 2026-04-09 | Phase 1 required fields expanded to 8 — added assumptions, NFRs, existing context |
 | 2026-04-09 | No explicit conflict priority ranking — covered by constraints + NFRs |
+| 2026-04-12 | Prompt 1 context includes latest unresolved conflicts from the most recent Prompt 2 run |
