@@ -20,10 +20,7 @@ This document provides practical `curl` examples and response samples for the cu
 ```json
 {
   "ok": false,
-  "error": {
-    "code": "bad_request",
-    "message": "Human-readable message"
-  }
+  "error": "Human-readable message"
 }
 ```
 

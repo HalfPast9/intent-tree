@@ -1,3 +1,6 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { connectNeo4j, disconnectNeo4j, withSession } from "../src/db/client";
 
 const APP_NODE_MATCH = `
@@ -23,7 +26,7 @@ function asNumber(value: unknown): number {
   return Number(value);
 }
 
-async function resetDb(): Promise<void> {
+export async function resetDb(): Promise<void> {
   console.warn("WARNING: This will delete all application data. Do not run in production.");
 
   await connectNeo4j();
@@ -47,7 +50,13 @@ async function resetDb(): Promise<void> {
   }
 }
 
-resetDb().catch((error) => {
-  console.error("Failed to reset database:", error);
-  process.exitCode = 1;
-});
+const isMain =
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMain) {
+  resetDb().catch((error) => {
+    console.error("Failed to reset database:", error);
+    process.exitCode = 1;
+  });
+}

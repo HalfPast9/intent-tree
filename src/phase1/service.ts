@@ -23,7 +23,7 @@ import {
   Phase1SpecField
 } from "./prompts.js";
 
-const PHASE1_SPEC_ID = "phase1-spec";
+const PHASE1_SPEC_ID = "spec-url-shortener";
 
 const DEFAULT_SPEC: ProblemSpec = {
   id: PHASE1_SPEC_ID,

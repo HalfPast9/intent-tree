@@ -28,6 +28,28 @@ const client = new OpenAI({
   defaultQuery: { "api-version": "2024-05-01-preview" }
 });
 
+const rawResponseLog: string[] = [];
+
+function recordRawResponse(raw: string): void {
+  rawResponseLog.push(raw);
+
+  if (rawResponseLog.length > 200) {
+    rawResponseLog.splice(0, rawResponseLog.length - 200);
+  }
+}
+
+export function getLLMRawLogLength(): number {
+  return rawResponseLog.length;
+}
+
+export function getLLMRawSince(index: number): string[] {
+  if (index < 0 || index >= rawResponseLog.length) {
+    return index < 0 ? [...rawResponseLog] : [];
+  }
+
+  return rawResponseLog.slice(index);
+}
+
 function extractTextContent(content: OpenAI.Chat.Completions.ChatCompletionMessageParam["content"] | OpenAI.Chat.Completions.ChatCompletion["choices"][number]["message"]["content"]): string {
   if (typeof content === "string") {
     return content;
@@ -77,6 +99,7 @@ export async function callLLMWithMessages<T extends Record<string, unknown>>(
   });
 
   const raw = extractTextContent(response.choices[0]?.message?.content);
+  recordRawResponse(raw);
 
   if (!raw) {
     throw new LLMResponseParseError("LLM response content was empty.", raw);

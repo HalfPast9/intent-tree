@@ -44,7 +44,7 @@ import {
 } from "./prompts.js";
 
 const SESSION_ID = "default-session";
-const PHASE1_SPEC_ID = "phase1-spec";
+const PHASE1_SPEC_ID = "spec-url-shortener";
 
 export interface StackEvolutionProposal {
   depth: number;
@@ -53,6 +53,9 @@ export interface StackEvolutionProposal {
 }
 
 const pendingStackEvolutionByDepth = new Map<number, StackEvolutionProposal>();
+const pendingStackProposal: { layers: StackLayerInput[] | null } = { layers: null };
+const pendingCriteriaByDepth = new Map<number, Prompt5Response>();
+const pendingNodesByDepth = new Map<number, Prompt6Response["nodes"]>();
 
 export interface Phase2NodeView {
   id: string;
@@ -217,6 +220,12 @@ function validatePrompt4(raw: Record<string, unknown>): Prompt4Response {
   };
 }
 
+function coerceToString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.join("\n");
+  return String(value ?? "");
+}
+
 function validatePrompt5(raw: Record<string, unknown>): Prompt5Response {
   const checklistRaw = Array.isArray(raw.checklist_template) ? raw.checklist_template : [];
   const checklist = checklistRaw.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
@@ -224,8 +233,8 @@ function validatePrompt5(raw: Record<string, unknown>): Prompt5Response {
   const doc: Prompt5Response = {
     layer_name: typeof raw.layer_name === "string" ? raw.layer_name : "",
     responsibility_scope: typeof raw.responsibility_scope === "string" ? raw.responsibility_scope : "",
-    considerations: typeof raw.considerations === "string" ? raw.considerations : "",
-    out_of_scope: typeof raw.out_of_scope === "string" ? raw.out_of_scope : "",
+    considerations: coerceToString(raw.considerations),
+    out_of_scope: coerceToString(raw.out_of_scope),
     checklist_template: checklist
   };
 
@@ -339,6 +348,20 @@ async function getCurrentSession(): Promise<SessionRecord> {
   return session;
 }
 
+async function requireApprovedStack(session: SessionRecord): Promise<AbstractionStack> {
+  if (!session.stack_id) {
+    throw new Error("Stack must be approved before this step.");
+  }
+
+  const stack = await getAbstractionStackById(session.stack_id);
+
+  if (!stack) {
+    throw new Error("Approved stack is missing.");
+  }
+
+  return stack;
+}
+
 export async function transitionSessionToPhase2(): Promise<SessionRecord> {
   await requirePhase1Spec();
   const session = await getCurrentSession();
@@ -407,10 +430,69 @@ export async function getOrCreateProposedStack(): Promise<{
   return { stack, layers: parsed.stack, session: updatedSession };
 }
 
+export async function proposeStack(): Promise<{ layers: StackLayerInput[]; session: SessionRecord }> {
+  await requirePhase1Spec();
+  let session = await getCurrentSession();
+
+  if (session.current_phase !== "phase2" || session.current_depth === null) {
+    session = await transitionSessionToPhase2();
+  }
+
+  const spec = await requirePhase1Spec();
+  const raw = await callLLMWithMessages<Record<string, unknown>>(
+    buildSimpleMessages(prompt3System(), prompt3User(spec))
+  );
+  const parsed = validatePrompt3(raw);
+
+  pendingStackProposal.layers = parsed.stack;
+
+  return { layers: parsed.stack, session };
+}
+
 export async function approveStack(input?: { layers?: StackLayerInput[] }): Promise<{
   stack: AbstractionStack;
   layers: StackLayerInput[];
 }> {
+  if (pendingStackProposal.layers) {
+    await requirePhase1Spec();
+    let session = await getCurrentSession();
+
+    if (session.current_phase !== "phase2" || session.current_depth === null) {
+      session = await transitionSessionToPhase2();
+    }
+
+    const proposedLayers = pendingStackProposal.layers;
+    const editedLayers = input?.layers && input.layers.length ? input.layers : proposedLayers;
+    const wasEdited = JSON.stringify(proposedLayers) !== JSON.stringify(editedLayers);
+
+    const stack = await createAbstractionStack({
+      id: `stack-${randomUUID()}`,
+      layers: JSON.stringify(editedLayers),
+      locked: true
+    });
+
+    const updatedSession = await updateSession(session.id, {
+      stack_id: stack.id,
+      current_phase: "phase2",
+      current_depth: 0
+    });
+
+    if (!updatedSession) {
+      throw new Error("Failed to attach stack to session.");
+    }
+
+    await emitEvent("stack_proposed", "llm", { stack: proposedLayers }, [stack.id]);
+
+    if (wasEdited) {
+      await emitEvent("stack_edited", "human", { stack: editedLayers }, [stack.id]);
+    }
+
+    await emitEvent("stack_approved", "human", { stack: editedLayers }, [stack.id]);
+    pendingStackProposal.layers = null;
+
+    return { stack, layers: editedLayers };
+  }
+
   const { stack } = await getOrCreateProposedStack();
 
   const existingLayers = parseStackLayers(stack);
@@ -438,7 +520,8 @@ export async function approveStack(input?: { layers?: StackLayerInput[] }): Prom
 
 async function runStackEvolutionCheck(depth: number): Promise<Prompt4Response> {
   const spec = await requirePhase1Spec();
-  const { stack } = await getOrCreateProposedStack();
+  const session = await getCurrentSession();
+  const stack = await requireApprovedStack(session);
   const layers = parseStackLayers(stack);
 
   const lockedLayerSummary: Array<{ depth: number; node_ids: string[] }> = [];
@@ -644,11 +727,113 @@ export async function getOrCreateLayerCriteria(depth: number): Promise<LayerCrit
   return created;
 }
 
+export async function generateLayerCriteria(depth: number): Promise<LayerCriteriaDoc> {
+  await requirePhase1Spec();
+
+  await getStackEvolutionProposal(depth);
+
+  if (pendingStackEvolutionByDepth.has(depth)) {
+    throw new Error("Stack evolution approval is required before generating criteria for this depth.");
+  }
+
+  const spec = await requirePhase1Spec();
+  const session = await getCurrentSession();
+  const stack = await requireApprovedStack(session);
+  const layers = parseStackLayers(stack);
+  const parentIntents = await getParentIntents(spec, depth);
+  const parentLayerCriteriaDoc = await getParentLayerCriteriaDocContext(depth);
+  const layerMeta = getCurrentLayerMeta(layers, depth);
+
+  const raw = await callLLMWithMessages<Record<string, unknown>>(
+    buildSimpleMessages(
+      prompt5System({
+        layerName: layerMeta.layerName,
+        depth,
+        totalLayers: layerMeta.totalLayers,
+        layerDescription: layerMeta.layerDescription
+      }),
+      prompt5User({
+        spec,
+        stack: layers,
+        depth,
+        parentIntents,
+        parentLayerCriteriaDoc,
+        existingNodesAtDepth: []
+      })
+    )
+  );
+
+  const parsed = validatePrompt5(raw);
+  pendingCriteriaByDepth.set(depth, parsed);
+
+  return {
+    id: `criteria-${depth}-pending`,
+    depth,
+    layer_name: parsed.layer_name,
+    responsibility_scope: parsed.responsibility_scope,
+    considerations: parsed.considerations,
+    out_of_scope: parsed.out_of_scope,
+    checklist_template: JSON.stringify(parsed.checklist_template),
+    locked: false
+  };
+}
+
 export async function approveLayerCriteria(
   depth: number,
   edits?: Partial<Omit<LayerCriteriaDoc, "id" | "depth">>
 ): Promise<LayerCriteriaDoc> {
-  const current = await getOrCreateLayerCriteria(depth);
+  const pending = pendingCriteriaByDepth.get(depth);
+
+  if (pending) {
+    const layer_name = edits?.layer_name ?? pending.layer_name;
+    const responsibility_scope = edits?.responsibility_scope ?? pending.responsibility_scope;
+    const considerations = edits?.considerations ?? pending.considerations;
+    const out_of_scope = edits?.out_of_scope ?? pending.out_of_scope;
+    const checklist_template = edits?.checklist_template ?? JSON.stringify(pending.checklist_template);
+
+    const created = await createLayerCriteriaDoc({
+      id: `criteria-${depth}-${randomUUID()}`,
+      depth,
+      layer_name,
+      responsibility_scope,
+      considerations,
+      out_of_scope,
+      checklist_template,
+      locked: true
+    });
+
+    await emitEvent(
+      "criteria_doc_generated",
+      "llm",
+      {
+        depth,
+        layer_name: pending.layer_name,
+        checklist_template: pending.checklist_template
+      },
+      [created.id]
+    );
+
+    const edited =
+      layer_name !== pending.layer_name ||
+      responsibility_scope !== pending.responsibility_scope ||
+      considerations !== pending.considerations ||
+      out_of_scope !== pending.out_of_scope ||
+      checklist_template !== JSON.stringify(pending.checklist_template);
+
+    if (edited) {
+      await emitEvent("criteria_doc_edited", "human", { depth }, [created.id]);
+    }
+
+    await emitEvent("criteria_doc_approved", "human", { depth }, [created.id]);
+    pendingCriteriaByDepth.delete(depth);
+    return created;
+  }
+
+  const current = await getLayerCriteriaDocByDepth(depth);
+
+  if (!current) {
+    throw new Error("No criteria proposal available. Generate criteria before approval.");
+  }
 
   const patch: Partial<Omit<LayerCriteriaDoc, "id" | "depth">> = {
     layer_name: edits?.layer_name ?? current.layer_name,
@@ -812,7 +997,133 @@ export async function getOrCreateLayerNodes(depth: number): Promise<Phase2NodeVi
   }));
 }
 
+export async function proposeLayerNodes(depth: number): Promise<Phase2NodeView[]> {
+  await requirePhase1Spec();
+
+  const spec = await requirePhase1Spec();
+  const session = await getCurrentSession();
+  const stack = await requireApprovedStack(session);
+  const layers = parseStackLayers(stack);
+  const criteria = await getLayerCriteriaDocByDepth(depth);
+
+  if (!criteria || !criteria.locked) {
+    throw new Error("Criteria doc must be approved before proposing nodes.");
+  }
+  const parentIntents = await getParentIntents(spec, depth);
+  const layerMeta = getCurrentLayerMeta(layers, depth);
+
+  const raw = await callLLMWithMessages<Record<string, unknown>>(
+    buildSimpleMessages(
+      prompt6System({
+        layerName: layerMeta.layerName,
+        depth,
+        totalLayers: layerMeta.totalLayers,
+        layerDescription: layerMeta.layerDescription
+      }),
+      prompt6User({
+        spec,
+        stack: layers,
+        depth,
+        parentIntents,
+        layerCriteriaDoc: {
+          layer_name: criteria.layer_name,
+          responsibility_scope: criteria.responsibility_scope,
+          considerations: criteria.considerations,
+          out_of_scope: criteria.out_of_scope,
+          checklist_template: JSON.parse(criteria.checklist_template)
+        },
+        existingNodesAtDepth: []
+      })
+    )
+  );
+
+  const parsed = validatePrompt6(raw);
+  pendingNodesByDepth.set(depth, parsed.nodes);
+
+  return parsed.nodes.map((node) => ({
+    id: node.id,
+    intent: node.intent,
+    parents: node.parents,
+    edges: node.edges,
+    checklist: node.checklist,
+    state: "pending"
+  }));
+}
+
 export async function approveLayerNodes(depth: number): Promise<{ approved: true }> {
+  const pendingNodes = pendingNodesByDepth.get(depth);
+
+  if (pendingNodes?.length) {
+    // TODO(10.7): Shared-node proposal/claim flow for multi-parent nodes is unresolved in spec section 10.7.
+    const edgeDedup = new Set<string>();
+
+    for (const nodeInput of pendingNodes) {
+      await createArchNode({
+        id: nodeInput.id,
+        intent: nodeInput.intent,
+        state: "pending",
+        depth,
+        parents: nodeInput.parents,
+        children: [],
+        edges: []
+      });
+
+      await emitEvent("node_proposed", "llm", { depth, node_id: nodeInput.id }, [nodeInput.id]);
+
+      await createNodeChecklistDraft({
+        id: `draft-${randomUUID()}`,
+        depth,
+        node_id: nodeInput.id,
+        checklist: JSON.stringify(nodeInput.checklist),
+        approved: false
+      });
+
+      await emitEvent(
+        "node_checklist_generated",
+        "llm",
+        { depth, node_id: nodeInput.id, checklist: nodeInput.checklist },
+        [nodeInput.id]
+      );
+
+      for (const edge of nodeInput.edges) {
+        const pairKey = [nodeInput.id, edge.target].sort().join("::");
+        const edgeKey = `${pairKey}::${edge.interface}::${edge.direction}`;
+
+        if (edgeDedup.has(edgeKey)) {
+          continue;
+        }
+
+        edgeDedup.add(edgeKey);
+
+        const edgeId = `edge-${randomUUID()}`;
+
+        await createArchEdge({
+          id: edgeId,
+          source: nodeInput.id,
+          target: edge.target,
+          interface: edge.interface,
+          direction: edge.direction
+        });
+
+        await emitEvent(
+          "edge_proposed",
+          "llm",
+          {
+            edge_id: edgeId,
+            source: nodeInput.id,
+            target: edge.target,
+            interface: edge.interface,
+            direction: edge.direction,
+            depth
+          },
+          [nodeInput.id, edge.target]
+        );
+      }
+    }
+
+    pendingNodesByDepth.delete(depth);
+  }
+
   const drafts = await getNodeChecklistDraftsByDepth(depth);
 
   for (const draft of drafts) {
