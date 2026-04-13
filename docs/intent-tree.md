@@ -720,7 +720,11 @@ All endpoints return a consistent response shape:
 - `ok` — boolean, false on error
 - `data` — the processed result for this endpoint
 - `llm_raw` — the raw LLM response string if this endpoint called the LLM, otherwise null
-- On error: `{ "ok": false, "error": "message" }`
+- On error:
+
+```json
+{ "ok": false, "error": { "code": "string", "message": "string" } }
+```
 
 ---
 

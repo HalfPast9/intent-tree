@@ -63,14 +63,6 @@ Sample success payload (`data`):
 
 ### Run conflict check (Prompt 2)
 
-Primary route:
-
-```bash
-curl -s -X POST http://localhost:3000/api/phase1/check-conflicts | jq
-```
-
-Compatibility alias:
-
 ```bash
 curl -s -X POST http://localhost:3000/api/phase1/conflict-check | jq
 ```
@@ -221,7 +213,7 @@ Run this sequence from an empty dev DB:
 curl -s -X POST http://localhost:3000/api/dev/reset | jq
 curl -s http://localhost:3000/api/phase1/spec | jq
 curl -s -X POST http://localhost:3000/api/phase1/message -H 'Content-Type: application/json' -d '{"message":"Build a URL shortener"}' | jq
-curl -s -X POST http://localhost:3000/api/phase1/check-conflicts | jq
+curl -s -X POST http://localhost:3000/api/phase1/conflict-check | jq
 curl -s -X POST http://localhost:3000/api/phase1/lock | jq
 curl -s -X POST http://localhost:3000/api/phase2/stack/propose | jq
 curl -s -X POST http://localhost:3000/api/phase2/stack/approve -H 'Content-Type: application/json' -d '{}' | jq
