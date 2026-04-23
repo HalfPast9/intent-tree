@@ -408,6 +408,49 @@ function validateLeafDeterminationResponse(raw: Record<string, unknown>): LeafDe
   return { nodes };
 }
 
+async function runClaimValidation(
+  spec: ProblemSpec,
+  node: { id: string; intent: string; inputs: string; outputs: string },
+  parentNodeIds: string[],
+  depth: number
+): Promise<boolean> {
+  const parentNodes = await Promise.all(parentNodeIds.map((id) => getArchNodeById(id)));
+  const validParents = parentNodes
+    .filter((p): p is NonNullable<typeof p> => p !== null)
+    .map((p) => ({ id: p.id, intent: p.intent, inputs: p.inputs, outputs: p.outputs }));
+
+  if (!validParents.length) return true;
+
+  const drafts = await getNodeChecklistDraftsByDepth(depth);
+  const draft = drafts.find((d) => d.node_id === node.id);
+  if (!draft) return true;
+
+  const checklist = parseChecklist(draft.checklist);
+  if (!checklist.length) return true;
+
+  const siblings = await getNodeSiblings(node.id);
+  const neighbours = await getNodeNeighbours(node.id);
+
+  const raw = await callLLMWithMessages<Record<string, unknown>>(
+    buildSimpleMessages(
+      prompt5System(),
+      prompt5User({
+        spec,
+        node: {
+          ...node,
+          edges: []
+        },
+        parentNodes: validParents,
+        siblings: siblings.map((s) => ({ id: s.id, intent: s.intent, inputs: s.inputs, outputs: s.outputs })),
+        neighbours: neighbours.map((n) => ({ id: n.id, intent: n.intent, inputs: n.inputs, outputs: n.outputs })),
+        checklist
+      })
+    )
+  );
+
+  return validatePrompt5(raw).passed;
+}
+
 export async function ensureDefaultSession(): Promise<SessionRecord> {
   const existing = await getSessionById(SESSION_ID);
 
@@ -882,6 +925,7 @@ export async function proposeLayerNodes(depth: number): Promise<Phase2NodeView[]
 }
 
 export async function approveLayerNodes(depth: number): Promise<{ approved: true }> {
+  const spec = await requirePhase1Spec();
   const pendingNodes = pendingNodesByDepth.get(depth);
 
   if (pendingNodes?.length) {
@@ -891,34 +935,130 @@ export async function approveLayerNodes(depth: number): Promise<{ approved: true
       if (nodeInput.claimed_from) {
         const existing = await getArchNodeById(nodeInput.claimed_from);
 
-        if (!existing) {
-          throw new Error(`Claimed node ${nodeInput.claimed_from} not found.`);
+        if (!existing) throw new Error(`Claimed node ${nodeInput.claimed_from} not found.`);
+
+        const hasEdits =
+          nodeInput.proposed_edits !== null &&
+          (nodeInput.proposed_edits?.intent || nodeInput.proposed_edits?.inputs || nodeInput.proposed_edits?.outputs);
+
+        if (hasEdits) {
+          const proposedEdits = nodeInput.proposed_edits ?? {};
+          const editedNode = {
+            id: existing.id,
+            intent: proposedEdits.intent ?? existing.intent,
+            inputs: proposedEdits.inputs ?? existing.inputs,
+            outputs: proposedEdits.outputs ?? existing.outputs
+          };
+          const passed = await runClaimValidation(spec, editedNode, existing.parents, depth);
+
+          if (!passed) {
+            const newId = `${existing.id}-fork-${randomUUID().slice(0, 8)}`;
+            await createArchNode({
+              id: newId,
+              intent: editedNode.intent,
+              state: "pending",
+              depth,
+              parents: nodeInput.parents,
+              children: [],
+              edges: [],
+              inputs: editedNode.inputs,
+              outputs: editedNode.outputs
+            });
+            await emitEvent(
+              "node_claim_rejected",
+              "llm",
+              {
+                depth,
+                claimed_node_id: existing.id,
+                requested_by_parents: nodeInput.parents,
+                proposed_edits: nodeInput.proposed_edits,
+                new_node_id: newId
+              },
+              [existing.id, newId]
+            );
+            if (nodeInput.checklist.length) {
+              await createNodeChecklistDraft({
+                id: `draft-${randomUUID()}`,
+                depth,
+                node_id: newId,
+                checklist: JSON.stringify(nodeInput.checklist),
+                approved: false
+              });
+              await emitEvent(
+                "node_checklist_generated",
+                "llm",
+                { depth, node_id: newId, checklist: nodeInput.checklist },
+                [newId]
+              );
+            }
+            continue;
+          }
+
+          const updates: {
+            parents: string[];
+            intent?: string;
+            inputs?: string;
+            outputs?: string;
+          } = { parents: [...new Set([...existing.parents, ...nodeInput.parents])] as string[] };
+          if (proposedEdits.intent) updates.intent = proposedEdits.intent;
+          if (proposedEdits.inputs) updates.inputs = proposedEdits.inputs;
+          if (proposedEdits.outputs) updates.outputs = proposedEdits.outputs;
+          await updateArchNode(existing.id, updates);
+          await emitEvent(
+            "node_claimed",
+            "llm",
+            {
+              depth,
+              node_id: existing.id,
+              claimed_by_parent: nodeInput.parents,
+              proposed_edits: nodeInput.proposed_edits
+            },
+            [existing.id]
+          );
+        } else {
+          const allParents = [...new Set([...existing.parents, ...nodeInput.parents])];
+          const passed = await runClaimValidation(
+            spec,
+            {
+              id: existing.id,
+              intent: existing.intent,
+              inputs: existing.inputs,
+              outputs: existing.outputs
+            },
+            allParents,
+            depth
+          );
+
+          if (!passed) {
+            await emitEvent(
+              "node_claim_rejected",
+              "llm",
+              {
+                depth,
+                claimed_node_id: existing.id,
+                requested_by_parents: nodeInput.parents,
+                proposed_edits: null,
+                new_node_id: null
+              },
+              [existing.id]
+            );
+            continue;
+          }
+
+          await updateArchNode(existing.id, { parents: allParents });
+          await emitEvent(
+            "node_claimed",
+            "llm",
+            {
+              depth,
+              node_id: existing.id,
+              claimed_by_parent: nodeInput.parents,
+              proposed_edits: null
+            },
+            [existing.id]
+          );
         }
 
-        const updatedParents = [...new Set([...existing.parents, ...nodeInput.parents])];
-        const updates: {
-          parents: string[];
-          intent?: string;
-          inputs?: string;
-          outputs?: string;
-        } = { parents: updatedParents };
-
-        if (nodeInput.proposed_edits?.intent) updates.intent = nodeInput.proposed_edits.intent;
-        if (nodeInput.proposed_edits?.inputs) updates.inputs = nodeInput.proposed_edits.inputs;
-        if (nodeInput.proposed_edits?.outputs) updates.outputs = nodeInput.proposed_edits.outputs;
-
-        await updateArchNode(existing.id, updates);
-        await emitEvent(
-          "node_claimed",
-          "llm",
-          {
-            depth,
-            node_id: existing.id,
-            claimed_by_parent: nodeInput.parents,
-            proposed_edits: nodeInput.proposed_edits
-          },
-          [existing.id]
-        );
         continue;
       }
 
@@ -1304,7 +1444,7 @@ export async function getExitCheckStatus(): Promise<{ complete: boolean; decompo
   }
 
   const decompose_further_ids = allNodes
-    .filter((node) => node.state === "locked" && node.leaf === false && !childrenMap.has(node.id))
+    .filter((node) => node.state === "locked" && node.leaf !== true && !childrenMap.has(node.id))
     .map((node) => node.id);
 
   return {
