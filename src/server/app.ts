@@ -19,15 +19,21 @@ import {
   runConflictCheck
 } from "../phase1/service.js";
 import {
-  approveLayerCriteria,
+  approveLayerDefinition,
   approveLayerNodes,
-  approveStack,
-  approveStackEvolution,
-  generateLayerCriteria,
-  getOrCreateProposedStack,
-  getStackEvolutionProposal,
+  confirmLeafNodes,
+  confirmDiagnosis,
+  determineLeafNodes,
+  diagnoseNode,
+  getExitCheckStatus,
+  generateLayerDefinition,
+  lockPhase2,
+  lockLayer,
   proposeLayerNodes,
-  proposeStack
+  runCollectiveVerticalCheck,
+  runLayerSyntaxCheck,
+  traverseUpward,
+  validateNode
 } from "../phase2/service.js";
 
 const publicDir = path.resolve(process.cwd(), "public");
@@ -148,7 +154,6 @@ export function createApp() {
         stack: stack
           ? {
               id: stack.id,
-              locked: stack.locked,
               layers: JSON.parse(stack.layers)
             }
           : null
@@ -158,66 +163,7 @@ export function createApp() {
     }
   });
 
-  app.post("/api/phase2/stack/propose", async (_req, res, next) => {
-    try {
-      const rawStart = getLLMRawLogLength();
-      const result = await proposeStack();
-      const llmRaw = getLLMRawSince(rawStart)[0] ?? null;
-      res.json(ok({ session: result.session, stack: result.layers }, llmRaw));
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post("/api/phase2/stack/evolution/check", async (req, res, next) => {
-    try {
-      const depth = parseDepth(req.body?.depth ?? 0);
-
-      if (depth === null) {
-        res.status(400).json({ ok: false, error: "Depth must be a non-negative integer." });
-        return;
-      }
-
-      const rawStart = getLLMRawLogLength();
-      const proposal = await getStackEvolutionProposal(depth);
-      const llmRaw = getLLMRawSince(rawStart)[0] ?? null;
-      res.json(ok({ depth, change_needed: proposal !== null, stack_evolution_proposal: proposal }, llmRaw));
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post("/api/phase2/stack/evolution/approve", async (req, res, next) => {
-    try {
-      const depth = parseDepth(req.body?.depth ?? 0);
-
-      if (depth === null) {
-        res.status(400).json({ ok: false, error: "Depth must be a non-negative integer." });
-        return;
-      }
-
-      const proposedStack = Array.isArray(req.body?.proposed_stack) ? req.body.proposed_stack : undefined;
-      const result = await approveStackEvolution({
-        depth,
-        proposed_stack: proposedStack
-      });
-      res.json(ok(result));
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post("/api/phase2/stack/approve", async (req, res, next) => {
-    try {
-      const layers = Array.isArray(req.body?.layers) ? req.body.layers : undefined;
-      const result = await approveStack({ layers });
-      res.json(ok(result));
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.get("/api/phase2/layer/:depth/criteria", async (req, res, next) => {
+  app.get("/api/phase2/layer/:depth/definition", async (req, res, next) => {
     try {
       const depth = parseDepth(req.params.depth);
 
@@ -226,14 +172,14 @@ export function createApp() {
         return;
       }
 
-      const criteria = await getLayerCriteriaDocByDepth(depth);
-      res.json(ok({ criteria }));
+      const definition = await getLayerCriteriaDocByDepth(depth);
+      res.json(ok({ definition }));
     } catch (error) {
       next(error);
     }
   });
 
-  app.post("/api/phase2/layer/:depth/criteria/generate", async (req, res, next) => {
+  app.post("/api/phase2/layer/:depth/definition/generate", async (req, res, next) => {
     try {
       const depth = parseDepth(req.params.depth);
 
@@ -243,15 +189,15 @@ export function createApp() {
       }
 
       const rawStart = getLLMRawLogLength();
-      const criteria = await generateLayerCriteria(depth);
+      const definition = await generateLayerDefinition(depth);
       const llmRaw = getLLMRawSince(rawStart)[0] ?? null;
-      res.json(ok({ criteria }, llmRaw));
+      res.json(ok({ definition }, llmRaw));
     } catch (error) {
       next(error);
     }
   });
 
-  app.post("/api/phase2/layer/:depth/criteria/approve", async (req, res, next) => {
+  app.post("/api/phase2/layer/:depth/definition/approve", async (req, res, next) => {
     try {
       const depth = parseDepth(req.params.depth);
 
@@ -260,8 +206,8 @@ export function createApp() {
         return;
       }
 
-      const criteria = await approveLayerCriteria(depth, req.body ?? undefined);
-      res.json(ok({ criteria }));
+      const definition = await approveLayerDefinition(depth, req.body ?? undefined);
+      res.json(ok({ definition }));
     } catch (error) {
       next(error);
     }
@@ -337,6 +283,195 @@ export function createApp() {
     }
   });
 
+  app.post("/api/phase2/layer/:depth/validate/node/:nodeId", async (req, res, next) => {
+    try {
+      const depth = parseDepth(req.params.depth);
+      if (depth === null) {
+        res.status(400).json({ ok: false, error: "Depth must be a non-negative integer." });
+        return;
+      }
+
+      const nodeId = req.params.nodeId;
+      if (!nodeId) {
+        res.status(400).json({ ok: false, error: "Node ID is required." });
+        return;
+      }
+
+      const rawStart = getLLMRawLogLength();
+      const result = await validateNode(depth, nodeId);
+      const llmRaw = getLLMRawSince(rawStart)[0] ?? null;
+      res.json(ok({ node_id: nodeId, ...result }, llmRaw));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/phase2/layer/:depth/validate/syntax", async (req, res, next) => {
+    try {
+      const depth = parseDepth(req.params.depth);
+      if (depth === null) {
+        res.status(400).json({ ok: false, error: "Depth must be a non-negative integer." });
+        return;
+      }
+
+      const result = await runLayerSyntaxCheck(depth);
+      res.json(ok({ passed: result.passed, errors: result.errors }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/phase2/layer/:depth/validate/collective", async (req, res, next) => {
+    try {
+      const depth = parseDepth(req.params.depth);
+      if (depth === null) {
+        res.status(400).json({ ok: false, error: "Depth must be a non-negative integer." });
+        return;
+      }
+
+      const rawStart = getLLMRawLogLength();
+      const result = await runCollectiveVerticalCheck(depth);
+      const llmRaw = getLLMRawSince(rawStart)[0] ?? null;
+      res.json(ok({ passed: result.passed, coverage: result.coverage, overlaps: result.overlaps }, llmRaw));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/phase2/layer/:depth/lock", async (req, res, next) => {
+    try {
+      const depth = parseDepth(req.params.depth);
+      if (depth === null) {
+        res.status(400).json({ ok: false, error: "Depth must be a non-negative integer." });
+        return;
+      }
+
+      const result = await lockLayer(depth);
+      res.json(ok({ locked: result.locked, node_count: result.node_count }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/phase2/layer/:depth/leaf/determine", async (req, res, next) => {
+    try {
+      const depth = parseDepth(req.params.depth);
+      if (depth === null) {
+        res.status(400).json({ ok: false, error: "Depth must be a non-negative integer." });
+        return;
+      }
+
+      const rawStart = getLLMRawLogLength();
+      const result = await determineLeafNodes(depth);
+      const llmRaw = getLLMRawSince(rawStart)[0] ?? null;
+      res.json(ok({ nodes: result.nodes }, llmRaw));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/phase2/layer/:depth/leaf/confirm", async (req, res, next) => {
+    try {
+      const depth = parseDepth(req.params.depth);
+      if (depth === null) {
+        res.status(400).json({ ok: false, error: "Depth must be a non-negative integer." });
+        return;
+      }
+
+      const rawOverrides = req.body?.overrides;
+      if (rawOverrides !== undefined) {
+        if (typeof rawOverrides !== "object" || rawOverrides === null || Array.isArray(rawOverrides)) {
+          res.status(400).json({ ok: false, error: "overrides must be an object." });
+          return;
+        }
+
+        const values = Object.values(rawOverrides as Record<string, unknown>);
+        const invalid = values.some((value) => value !== "leaf" && value !== "decompose_further");
+        if (invalid) {
+          res.status(400).json({ ok: false, error: 'Each override must be "leaf" or "decompose_further".' });
+          return;
+        }
+      }
+
+      const result = await confirmLeafNodes(
+        depth,
+        rawOverrides as Record<string, "leaf" | "decompose_further"> | undefined
+      );
+      res.json(ok({ nodes: result.nodes }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/phase2/exit-check", async (_req, res, next) => {
+    try {
+      const result = await getExitCheckStatus();
+      res.json(ok({ complete: result.complete, decompose_further_ids: result.decompose_further_ids }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/phase2/lock", async (_req, res, next) => {
+    try {
+      const result = await lockPhase2();
+      res.json(ok({ locked: result.locked }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/phase2/diagnose/:nodeId", async (req, res, next) => {
+    try {
+      const nodeId = req.params.nodeId;
+      if (!nodeId) {
+        res.status(400).json({ ok: false, error: "Node ID is required." });
+        return;
+      }
+
+      const rawStart = getLLMRawLogLength();
+      const result = await diagnoseNode(nodeId);
+      const llmRaw = getLLMRawSince(rawStart)[0] ?? null;
+      res.json(ok({ node_id: nodeId, ...result }, llmRaw));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/phase2/diagnose/:nodeId/confirm", async (req, res, next) => {
+    try {
+      const nodeId = req.params.nodeId;
+      if (!nodeId) {
+        res.status(400).json({ ok: false, error: "Node ID is required." });
+        return;
+      }
+
+      const result = await confirmDiagnosis(nodeId, req.body ?? undefined);
+      res.json(ok({ node_id: nodeId, ...result }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/phase2/traverse/upward", async (req, res, next) => {
+    try {
+      const originNodes = req.body?.origin_nodes;
+      if (
+        !Array.isArray(originNodes) ||
+        originNodes.length === 0 ||
+        !originNodes.every((id: unknown) => typeof id === "string")
+      ) {
+        res.status(400).json({ ok: false, error: "origin_nodes must be a non-empty array of strings." });
+        return;
+      }
+
+      const result = await traverseUpward(originNodes);
+      res.json(ok({ invalidated: result.invalidated }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/state/session", async (_req, res, next) => {
     try {
       const session = await getAnySession();
@@ -391,13 +526,13 @@ export function createApp() {
         return;
       }
 
-      const criteria = await getLayerCriteriaDocByDepth(depth);
+      const definition = await getLayerCriteriaDocByDepth(depth);
       const nodes = await getNodesByDepth(depth);
 
       res.json(
         ok({
           depth,
-          criteria_locked: Boolean(criteria?.locked),
+          definition_locked: Boolean(definition?.locked),
           nodes: nodes.map((node) => ({ id: node.id, state: node.state, intent: node.intent }))
         })
       );

@@ -9,8 +9,7 @@ import { getNodeProps } from "../utils.js";
 function mapStack(props: Record<string, unknown>): AbstractionStack {
   return {
     id: String(props.id),
-    layers: String(props.layers),
-    locked: Boolean(props.locked)
+    layers: String(props.layers)
   };
 }
 
@@ -23,8 +22,7 @@ export async function createAbstractionStack(
         `
         CREATE (s:AbstractionStack {
           id: $id,
-          layers: $layers,
-          locked: $locked
+          layers: $layers
         })
         RETURN s
         `,

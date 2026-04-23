@@ -23,7 +23,10 @@ function mapArchNode(props: Record<string, unknown>): ArchNode {
     depth: toNumber(props.depth),
     parents: Array.isArray(props.parents) ? props.parents.map(String) : [],
     children: Array.isArray(props.children) ? props.children.map(String) : [],
-    edges: Array.isArray(props.edges) ? props.edges.map(String) : []
+    edges: Array.isArray(props.edges) ? props.edges.map(String) : [],
+    inputs: String(props.inputs ?? ""),
+    outputs: String(props.outputs ?? ""),
+    leaf: props.leaf === true ? true : props.leaf === false ? false : null
   };
 }
 
@@ -39,7 +42,9 @@ export async function createArchNode(data: ArchNodeCreateInput): Promise<ArchNod
           depth: $depth,
           parents: $parents,
           children: $children,
-          edges: $edges
+          edges: $edges,
+          inputs: $inputs,
+          outputs: $outputs
         })
         WITH n, $parents AS parentIds, $children AS childIds, $edges AS edgeIds
         CALL {
@@ -72,7 +77,9 @@ export async function createArchNode(data: ArchNodeCreateInput): Promise<ArchNod
           depth: data.depth,
           parents: data.parents,
           children: data.children,
-          edges: data.edges
+          edges: data.edges,
+          inputs: data.inputs,
+          outputs: data.outputs
         }
       )
     );
@@ -83,7 +90,6 @@ export async function createArchNode(data: ArchNodeCreateInput): Promise<ArchNod
       throw new Error(`Failed to create ArchNode ${data.id}`);
     }
 
-    // TODO(10.7): Shared-node creation and claiming rules for multi-parent nodes are still open in spec section 10.7.
     return mapArchNode(getNodeProps(record, "n"));
   });
 }
@@ -119,6 +125,9 @@ export async function updateArchNode(
     if (fields.parents !== undefined) updatedProps.parents = fields.parents;
     if (fields.children !== undefined) updatedProps.children = fields.children;
     if (fields.edges !== undefined) updatedProps.edges = fields.edges;
+    if (fields.inputs !== undefined) updatedProps.inputs = fields.inputs;
+    if (fields.outputs !== undefined) updatedProps.outputs = fields.outputs;
+    if (fields.leaf !== undefined) updatedProps.leaf = fields.leaf;
 
     const result = await session.executeWrite((tx) =>
       tx.run(

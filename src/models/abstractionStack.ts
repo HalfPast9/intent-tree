@@ -7,7 +7,6 @@ export interface StackLayer {
 export interface AbstractionStack {
   id: string;
   layers: string;
-  locked: boolean;
 }
 
 export type AbstractionStackCreateInput = AbstractionStack;

@@ -106,6 +106,24 @@ export async function getEventHistory(nodeId: string): Promise<EventRecord[]> {
   });
 }
 
+export async function getEventsByNodeId(nodeId: string): Promise<EventRecord[]> {
+  return withSession("READ", async (session) => {
+    const result = await session.executeRead((tx) =>
+      tx.run(
+        `
+        MATCH (ev:Event)-[:AFFECTS]->(n {id: $nodeId})
+        WHERE n:ArchNode OR n:ProblemSpec OR n:Session OR n:AbstractionStack OR n:LayerCriteriaDoc OR n:NodeChecklistDraft
+        RETURN ev
+        ORDER BY ev.timestamp ASC, ev.id ASC
+        `,
+        { nodeId }
+      )
+    );
+
+    return result.records.map((record) => mapEvent(getNodeProps(record, "ev")));
+  });
+}
+
 export async function getFullTimeline(): Promise<EventRecord[]> {
   return withSession("READ", async (session) => {
     const result = await session.executeRead((tx) =>
