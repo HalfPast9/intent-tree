@@ -8,6 +8,9 @@ export interface ArchNode {
   parents: string[];
   children: string[];
   edges: string[];
+  inputs: string;
+  outputs: string;
+  leaf?: boolean | null;
 }
 
 export type ArchNodeCreateInput = ArchNode;

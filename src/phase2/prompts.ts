@@ -8,16 +8,6 @@ export interface StackLayerInput {
 }
 
 export interface Prompt3Response {
-  stack: StackLayerInput[];
-}
-
-export interface Prompt4Response {
-  change_needed: boolean;
-  proposed_stack: StackLayerInput[];
-  reasoning: string;
-}
-
-export interface Prompt5Response {
   layer_name: string;
   responsibility_scope: string;
   considerations: string;
@@ -40,12 +30,63 @@ export interface ProposedNodeInput {
   id: string;
   intent: string;
   parents: string[];
+  inputs: string;
+  outputs: string;
   edges: ProposedEdgeInput[];
+  claimed_from: string | null;
+  proposed_edits: { intent?: string; inputs?: string; outputs?: string } | null;
   checklist: NodeChecklistItem[];
 }
 
-export interface Prompt6Response {
+export interface Prompt4Response {
   nodes: ProposedNodeInput[];
+}
+
+export interface Prompt5ValidationResult {
+  item: string;
+  passed: boolean;
+  reasoning: string;
+}
+
+export interface Prompt5Response {
+  passed: boolean;
+  results: Prompt5ValidationResult[];
+}
+
+export interface Prompt6CoverageItem {
+  parent: string;
+  fully_covered: boolean;
+  gaps: string[];
+  reasoning: string;
+}
+
+export interface Prompt6OverlapItem {
+  nodes: string[];
+  overlap: string;
+  reasoning: string;
+}
+
+export interface Prompt6Response {
+  passed: boolean;
+  coverage: Prompt6CoverageItem[];
+  overlaps: Prompt6OverlapItem[];
+}
+
+export interface Prompt7Response {
+  classification: "implementation" | "design";
+  reasoning: string;
+  origin_nodes: string[];
+  suggested_action: string;
+}
+
+export interface LeafDetermination {
+  node_id: string;
+  determination: "leaf" | "decompose_further";
+  reasoning: string;
+}
+
+export interface LeafDeterminationResponse {
+  nodes: LeafDetermination[];
 }
 
 function phase1View(spec: ProblemSpec): Record<string, string> {
@@ -61,58 +102,15 @@ function phase1View(spec: ProblemSpec): Record<string, string> {
   };
 }
 
-export function prompt3System(): string {
-  return [
-    "You are Prompt 3 (Abstraction Stack Proposal) for Intent Tree.",
-    "Return only JSON with shape: { stack: [{ layer, description, reasoning }] }.",
-    "Design a problem-appropriate abstraction stack from high-level to low-level.",
-    "Each item must be concise and meaningful."
-  ].join("\n");
-}
 
-export function prompt3User(spec: ProblemSpec): string {
-  return [
-    "Phase 1 spec:",
-    JSON.stringify(phase1View(spec), null, 2)
-  ].join("\n");
-}
-
-export function prompt4System(): string {
-  return [
-    "You are Prompt 4 (Stack Evolution Check) for Intent Tree.",
-    "Return only JSON with shape: { change_needed: boolean, proposed_stack: [{ layer, description, reasoning }], reasoning: string }.",
-    "If no change is needed, return change_needed=false, proposed_stack=[], reasoning=''"
-  ].join("\n");
-}
-
-export function prompt4User(args: {
-  spec: ProblemSpec;
-  currentStack: StackLayerInput[];
-  currentDepth: number;
-  lockedLayerSummary: Array<{ depth: number; node_ids: string[] }>;
-}): string {
-  return [
-    "Phase 1 spec:",
-    JSON.stringify(phase1View(args.spec), null, 2),
-    "",
-    "Current abstraction stack:",
-    JSON.stringify(args.currentStack, null, 2),
-    "",
-    `Current depth: ${args.currentDepth}`,
-    "",
-    "Locked layer summary:",
-    JSON.stringify(args.lockedLayerSummary, null, 2)
-  ].join("\n");
-}
-
-export function prompt5System(args: {
+export function prompt3System(args: {
   layerName: string;
   depth: number;
   totalLayers: number;
   layerDescription: string;
 }): string {
   return [
-    "You are Prompt 5 (Layer Criteria Doc Generation) for Intent Tree.",
+    "You are Prompt 3 (Layer Definition) for Intent Tree. You define what the next layer of abstraction is - its name, scope, considerations, and validation checklist. You do not predict future layers - only define the immediate next one based on what has been built so far.",
     `Current layer: ${args.layerName}`,
     `Current position: depth ${args.depth} of ${args.totalLayers}`,
     `Layer description: ${args.layerDescription}`,
@@ -122,7 +120,7 @@ export function prompt5System(args: {
   ].join("\n");
 }
 
-export function prompt5User(args: {
+export function prompt3User(args: {
   spec: ProblemSpec;
   stack: StackLayerInput[];
   depth: number;
@@ -146,45 +144,229 @@ export function prompt5User(args: {
   ].join("\n");
 }
 
-export function prompt6System(args: {
+export function prompt4System(args: {
   layerName: string;
   depth: number;
   totalLayers: number;
   layerDescription: string;
 }): string {
   return [
-    "You are Prompt 6 (Node + Checklist Proposal) for Intent Tree.",
+    "You are Prompt 4 (Node + Checklist Proposal) for Intent Tree.",
+    "You decompose a SINGLE parent into child subsystem nodes at the next layer down.",
     `Current layer: ${args.layerName}`,
-    `Current position: depth ${args.depth} of ${args.totalLayers}`,
     `Layer description: ${args.layerDescription}`,
-    "Node proposals must match this abstraction level: not finer (belongs to deeper layers) and not coarser (belongs to shallower layers).",
+    "",
+    "IMPORTANT: You are decomposing ONE specific parent. All proposed nodes must be children of that parent.",
+    "",
+    "Each node must include:",
+    "- inputs: what this node receives (natural language at upper layers, typed signature at leaf level)",
+    "- outputs: what this node produces (natural language at upper layers, typed signature at leaf level)",
+    "",
+    "SHARED NODE CLAIMING: You will be shown existing nodes at this depth from prior parent decompositions.",
+    "If an existing node should also be a child of the current parent:",
+    "- Set claimed_from to the existing node's id",
+    "- Set proposed_edits to null (claim as-is) or to an object with fields to change",
+    "- Keep the same id as the claimed node",
+    "If creating a new node, set claimed_from and proposed_edits to null.",
+    "",
     "Return only JSON with shape:",
-    "{ nodes: [{ id, intent, parents: string[], edges: [{ target, interface, direction }], checklist: [{ item, context }] }] }",
-    "IDs should follow depth+slug format like L0-frontend."
+    '{ "nodes": [{ "id": "L<depth>-<slug>", "intent": "...", "parents": ["<parent_id>"], "inputs": "...", "outputs": "...", "edges": [{ "target": "<sibling_id>", "interface": "...", "direction": "directed"|"bidirectional" }], "claimed_from": null, "proposed_edits": null, "checklist": [{ "item": "...", "context": "..." }] }] }'
   ].join("\n");
 }
 
-export function prompt6User(args: {
+export function prompt4User(args: {
   spec: ProblemSpec;
   stack: StackLayerInput[];
   depth: number;
-  parentIntents: string[];
-  layerCriteriaDoc: Prompt5Response;
-  existingNodesAtDepth: Array<{ id: string; intent: string }>;
+  parent:
+    | { id: string; intent: string; inputs: string; outputs: string }
+    | { id: "root"; intent: string };
+  layerCriteriaDoc: Prompt3Response;
+  existingNodesAtDepth: Array<{ id: string; intent: string; inputs: string; outputs: string; parents: string[] }>;
 }): string {
   return [
     "Phase 1 spec:",
     JSON.stringify(phase1View(args.spec), null, 2),
     "",
-    "Stack:",
+    "Stack (layers defined so far):",
     JSON.stringify(args.stack, null, 2),
     `Current depth: ${args.depth}`,
-    "Parent intents:",
-    JSON.stringify(args.parentIntents, null, 2),
-    "Layer criteria doc:",
+    "",
+    "PARENT TO DECOMPOSE:",
+    JSON.stringify(args.parent, null, 2),
+    "",
+    "Layer definition:",
     JSON.stringify(args.layerCriteriaDoc, null, 2),
-    "Existing nodes at this depth:",
-    JSON.stringify(args.existingNodesAtDepth, null, 2)
+    "",
+    "Existing nodes at this depth (from prior parent decompositions - you may claim these as shared children):",
+    args.existingNodesAtDepth.length
+      ? JSON.stringify(args.existingNodesAtDepth, null, 2)
+      : "None yet."
+  ].join("\n");
+}
+
+export function prompt5System(): string {
+  return [
+    "You are Prompt 5 (Node Validation) for Intent Tree.",
+    "You validate a single node against its checklist. This is a structured comparison task - be precise and unambiguous.",
+    "",
+    "For EVERY checklist item, you must provide:",
+    "- Whether it passed or failed",
+    "- Concrete reasoning explaining WHY it passed or failed",
+    "",
+    "A node passes overall only if ALL checklist items pass.",
+    "Include full reasoning on every item - passes AND failures. No shortcuts.",
+    "",
+    "Return only JSON with shape:",
+    '{ "passed": true|false, "results": [{ "item": "checklist item text", "passed": true|false, "reasoning": "why" }] }'
+  ].join("\n");
+}
+
+export function prompt5User(args: {
+  spec: ProblemSpec;
+  node: {
+    id: string;
+    intent: string;
+    inputs: string;
+    outputs: string;
+    edges: Array<{ target: string; interface: string; direction: "directed" | "bidirectional" }>;
+  };
+  parentNodes: Array<{ id: string; intent: string; inputs: string; outputs: string }>;
+  siblings: Array<{ id: string; intent: string; inputs: string; outputs: string }>;
+  neighbours: Array<{ id: string; intent: string; inputs: string; outputs: string }>;
+  checklist: Array<{ item: string; context: string }>;
+}): string {
+  return [
+    "Phase 1 spec:",
+    JSON.stringify(phase1View(args.spec), null, 2),
+    "",
+    "NODE TO VALIDATE:",
+    JSON.stringify(args.node, null, 2),
+    "",
+    "Parent nodes:",
+    JSON.stringify(args.parentNodes, null, 2),
+    "",
+    "Sibling nodes (same parent, same depth):",
+    JSON.stringify(args.siblings, null, 2),
+    "",
+    "Edge-connected neighbours (same depth):",
+    JSON.stringify(args.neighbours, null, 2),
+    "",
+    "CHECKLIST TO VALIDATE AGAINST:",
+    JSON.stringify(args.checklist, null, 2)
+  ].join("\n");
+}
+
+export function prompt6System(): string {
+  return [
+    "You are Prompt 6 (Collective Vertical Check) for Intent Tree.",
+    "You evaluate whether the full set of child nodes together fully covers every parent's intent with no gaps and no overlapping responsibilities.",
+    "For each parent: list gaps (aspects of parent intent not handled by any child).",
+    "Separately list all overlapping responsibilities between sibling pairs.",
+    "A layer passes only when every parent is fully covered AND there are no overlaps.",
+    "Return only JSON with shape:",
+    '{ "passed": true|false, "coverage": [{ "parent": "...", "fully_covered": true|false, "gaps": [...], "reasoning": "..." }], "overlaps": [{ "nodes": [...], "overlap": "...", "reasoning": "..." }] }'
+  ].join("\n");
+}
+
+export function prompt6User(args: {
+  spec: ProblemSpec;
+  depth: number;
+  parents: Array<{ id: string; intent: string; inputs: string; outputs: string }>;
+  siblings: Array<{ id: string; intent: string; inputs: string; outputs: string; parents: string[] }>;
+  layerCriteriaDoc: Prompt3Response;
+}): string {
+  return [
+    "Phase 1 spec:",
+    JSON.stringify(phase1View(args.spec), null, 2),
+    "",
+    `Depth: ${args.depth}`,
+    "",
+    "Parents to check coverage for:",
+    JSON.stringify(args.parents, null, 2),
+    "",
+    "All sibling nodes at this depth:",
+    JSON.stringify(args.siblings, null, 2),
+    "",
+    "Layer definition:",
+    JSON.stringify(args.layerCriteriaDoc, null, 2)
+  ].join("\n");
+}
+
+export function prompt7System(): string {
+  return [
+    "You are Prompt 7 (Failure Diagnosis) for Intent Tree.",
+    "You diagnose why a node failed validation.",
+    'Classify as "implementation" (the node\'s own definition is wrong - inputs/outputs/intent can be fixed locally) or "design" (the problem originates in one or more ancestor nodes - the architecture itself needs restructuring).',
+    'For implementation errors: origin_nodes must be empty.',
+    "For design errors: origin_nodes lists all nodes where the problem originates - trace through parent chains, list every root cause node.",
+    "Return only JSON:",
+    '{ "classification": "implementation"|"design", "reasoning": "...", "origin_nodes": [...], "suggested_action": "..." }'
+  ].join("\n");
+}
+
+export function prompt7User(args: {
+  spec: ProblemSpec;
+  node: { id: string; intent: string; inputs: string; outputs: string };
+  failedResults: Array<{ item: string; passed: boolean; reasoning: string }>;
+  parentNodes: Array<{ id: string; intent: string; inputs: string; outputs: string }>;
+  siblings: Array<{ id: string; intent: string; inputs: string; outputs: string }>;
+  neighbours: Array<{ id: string; intent: string; inputs: string; outputs: string }>;
+  layerCriteriaDoc: Prompt3Response;
+  stack: StackLayerInput[];
+}): string {
+  return [
+    "Phase 1 spec:",
+    JSON.stringify(phase1View(args.spec), null, 2),
+    "",
+    "FAILED NODE:",
+    JSON.stringify(args.node, null, 2),
+    "",
+    "Failed checklist results:",
+    JSON.stringify(args.failedResults, null, 2),
+    "",
+    "Parent nodes:",
+    JSON.stringify(args.parentNodes, null, 2),
+    "",
+    "Sibling nodes:",
+    JSON.stringify(args.siblings, null, 2),
+    "",
+    "Edge-connected neighbours:",
+    JSON.stringify(args.neighbours, null, 2),
+    "",
+    "Layer definition:",
+    JSON.stringify(args.layerCriteriaDoc, null, 2),
+    "",
+    "Stack:",
+    JSON.stringify(args.stack, null, 2)
+  ].join("\n");
+}
+
+export function promptLeafSystem(): string {
+  return [
+    "You are the Leaf Determination evaluator for Intent Tree.",
+    "For each node, decide: does it contain sub-components that have relationships with each other, or is it a single block of logic (a function)?",
+    'Return "leaf" if it is a single indivisible operation.',
+    'Return "decompose_further" if it contains multiple parts that interact.',
+    "Leaf nodes must eventually have fully typed inputs/outputs - flag in reasoning if a node is leaf but its inputs/outputs are still vague.",
+    "Return only JSON:",
+    '{ "nodes": [{ "node_id": "...", "determination": "leaf"|"decompose_further", "reasoning": "..." }] }'
+  ].join("\n");
+}
+
+export function promptLeafUser(args: {
+  spec: ProblemSpec;
+  depth: number;
+  nodes: Array<{ id: string; intent: string; inputs: string; outputs: string }>;
+}): string {
+  return [
+    "Phase 1 spec:",
+    JSON.stringify(phase1View(args.spec), null, 2),
+    "",
+    `Depth: ${args.depth}`,
+    "",
+    "Nodes to classify:",
+    JSON.stringify(args.nodes, null, 2)
   ].join("\n");
 }
 

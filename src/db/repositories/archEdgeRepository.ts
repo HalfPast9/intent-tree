@@ -147,3 +147,25 @@ export async function deleteArchEdge(id: string): Promise<boolean> {
     return deletedCount > 0;
   });
 }
+
+export async function getEdgesByDepth(depth: number): Promise<ArchEdge[]> {
+  return withSession("READ", async (session) => {
+    const result = await session.executeRead((tx) =>
+      tx.run(
+        `
+        MATCH (e:ArchEdge)
+        WHERE EXISTS {
+          MATCH (src:ArchNode {id: e.source, depth: $depth})
+        } OR EXISTS {
+          MATCH (tgt:ArchNode {id: e.target, depth: $depth})
+        }
+        RETURN e
+        ORDER BY e.id ASC
+        `,
+        { depth }
+      )
+    );
+
+    return result.records.map((record) => mapArchEdge(getNodeProps(record, "e")));
+  });
+}

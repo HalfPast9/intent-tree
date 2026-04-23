@@ -87,35 +87,8 @@ curl -s -X POST http://localhost:3000/api/phase1/lock | jq
 curl -s http://localhost:3000/api/phase2/stack | jq
 ```
 
-### Propose stack (Prompt 3)
-
-```bash
-curl -s -X POST http://localhost:3000/api/phase2/stack/propose | jq
-```
-
-### Approve stack
-
-```bash
-curl -s -X POST http://localhost:3000/api/phase2/stack/approve \
-  -H 'Content-Type: application/json' \
-  -d '{"layers":[{"layer":"System","description":"Top-level system intent","reasoning":"Matches business scope"}]}' | jq
-```
-
-### Check stack evolution (Prompt 4)
-
-```bash
-curl -s -X POST http://localhost:3000/api/phase2/stack/evolution/check \
-  -H 'Content-Type: application/json' \
-  -d '{"depth":0}' | jq
-```
-
-### Approve stack evolution
-
-```bash
-curl -s -X POST http://localhost:3000/api/phase2/stack/evolution/approve \
-  -H 'Content-Type: application/json' \
-  -d '{"depth":0,"proposed_stack":[{"layer":"System","description":"Top-level system intent","reasoning":"Refined for depth 0"}]}' | jq
-```
+The stack follows the PRD growing-log model: there is no upfront stack proposal/approval API.
+`GET /api/phase2/stack` is read-only inspection of the current accumulated stack state.
 
 ## Phase 2 Layer
 
@@ -125,7 +98,7 @@ curl -s -X POST http://localhost:3000/api/phase2/stack/evolution/approve \
 curl -s http://localhost:3000/api/phase2/layer/0/criteria | jq
 ```
 
-### Generate criteria (Prompt 5)
+### Generate criteria (Prompt 3 in PRD)
 
 ```bash
 curl -s -X POST http://localhost:3000/api/phase2/layer/0/criteria/generate | jq
@@ -145,7 +118,7 @@ curl -s -X POST http://localhost:3000/api/phase2/layer/0/criteria/approve \
 curl -s http://localhost:3000/api/phase2/layer/0/nodes | jq
 ```
 
-### Propose nodes (Prompt 6)
+### Propose nodes (Prompt 4 in PRD)
 
 ```bash
 curl -s -X POST http://localhost:3000/api/phase2/layer/0/nodes/propose | jq
@@ -230,8 +203,7 @@ curl -s http://localhost:3000/api/phase1/spec | jq
 curl -s -X POST http://localhost:3000/api/phase1/message -H 'Content-Type: application/json' -d '{"message":"Build a URL shortener"}' | jq
 curl -s -X POST http://localhost:3000/api/phase1/conflict-check | jq
 curl -s -X POST http://localhost:3000/api/phase1/lock | jq
-curl -s -X POST http://localhost:3000/api/phase2/stack/propose | jq
-curl -s -X POST http://localhost:3000/api/phase2/stack/approve -H 'Content-Type: application/json' -d '{}' | jq
+curl -s http://localhost:3000/api/phase2/stack | jq
 curl -s -X POST http://localhost:3000/api/phase2/layer/0/criteria/generate | jq
 curl -s -X POST http://localhost:3000/api/phase2/layer/0/criteria/approve -H 'Content-Type: application/json' -d '{}' | jq
 curl -s -X POST http://localhost:3000/api/phase2/layer/0/nodes/propose | jq
