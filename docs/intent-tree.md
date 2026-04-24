@@ -1,5 +1,5 @@
 # Intent Tree — Technical Specification
-> V1 build target. Last updated: 2026-04-23.
+> V1 build target. Last updated: 2026-04-24.
 
 ---
 
@@ -695,6 +695,9 @@ Practical request/response examples are documented in `docs/api.md`.
 | `GET` | `/api/phase2/layer/:depth/nodes` | All nodes at given depth |
 | `POST` | `/api/phase2/layer/:depth/nodes/propose` | Run Prompt 4, return proposed nodes + checklists + raw LLM output |
 | `POST` | `/api/phase2/layer/:depth/nodes/approve` | User confirms proposed nodes and checklists |
+| `POST` | `/api/phase2/layer/:depth/nodes/repropose/parent/:parentId` | Re-run Prompt 4 for a single parent (accumulates into pending re-proposal batch) |
+| `POST` | `/api/phase2/layer/:depth/nodes/repropose/approve` | Approve accumulated re-proposed nodes for all queued parents |
+| `PATCH` | `/api/phase2/layer/:depth/node/:nodeId` | Human direct edit of a node's intent/inputs/outputs — emits `human_override` event |
 
 ### 9.4 Phase 2 — Validation endpoints
 
@@ -703,18 +706,36 @@ Practical request/response examples are documented in `docs/api.md`.
 | `POST` | `/api/phase2/layer/:depth/validate/node/:nodeId` | Run Prompt 5 on a single node, return checklist results + raw LLM output |
 | `POST` | `/api/phase2/layer/:depth/validate/collective` | Run Prompt 6 collective vertical check, return coverage + overlap results + raw LLM output |
 | `POST` | `/api/phase2/layer/:depth/validate/syntax` | Run syntax checker (rule-based), return structural errors |
-| `POST` | `/api/phase2/layer/:depth/lock` | Lock layer after all validation passes |
+| `POST` | `/api/phase2/layer/:depth/lock` | Lock layer — three hard gates must all pass first (see below) |
+
+**Layer lock gates (all three required):**
+1. A `collective_vertical_passed` event exists for this depth — P6 must have passed, not just run
+2. A `syntax_check_passed` event exists for this depth — syntax check must have passed
+3. Every node at this depth has `node_validation_passed` as its most recent validation event — no node may have an outstanding failure
 
 ### 9.5 Phase 2 — Failure handling endpoints
 
 | Method | Route | Description |
 |--------|-------|-------------|
 | `POST` | `/api/phase2/diagnose/:nodeId` | Run Prompt 7 failure diagnosis, return classification + origin nodes + raw LLM output |
-| `POST` | `/api/phase2/diagnose/:nodeId/confirm` | Human confirms or overrides diagnosis |
+| `POST` | `/api/phase2/diagnose/:nodeId/confirm` | Human confirms or overrides diagnosis (reads from event log — no LLM call) |
 | `POST` | `/api/phase2/diagnose/:nodeId/rewrite` | Run Prompt 8 — rewrite node intent/inputs/outputs based on failed checklist items, auto-revalidates |
-| `POST` | `/api/phase2/traverse/upward` | Trigger upward traversal from given origin nodes, invalidate affected nodes |
+| `POST` | `/api/phase2/traverse/upward` | Cascade invalidation downward from given origin nodes — body: `{"origin_nodes": ["nodeId"]}` |
 
-### 9.6 State inspection endpoints
+**Traversal semantics:** `origin_nodes` are the nodes that carry the design flaw. Traversal marks each origin and all of its descendants as `invalidated`. This is intentionally named "upward" because the origin is above the failing node in the parent chain — but the invalidation cascades downward from those origins.
+
+### 9.6 Phase 2 — Leaf determination and completion endpoints
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| `POST` | `/api/phase2/layer/:depth/leaf/determine` | Run LLM leaf determination on all locked nodes at depth — returns `leaf` or `decompose_further` per node |
+| `POST` | `/api/phase2/layer/:depth/leaf/confirm` | Human confirms or overrides leaf determinations — body: `{"overrides": {"nodeId": "leaf"}}` |
+| `GET` | `/api/phase2/exit-check` | Check if all non-leaf nodes have been decomposed — returns `{complete, decompose_further_ids}` |
+| `POST` | `/api/phase2/lock` | Lock Phase 2 — requires exit check to be complete |
+
+**Leaf confirm body:** Pass `{"overrides": {"nodeId": "leaf" | "decompose_further"}}` to override specific nodes. Omit `overrides` or send empty body to accept LLM determination as-is. Pending determinations survive server restarts — they are persisted to the layer definition record until confirmed.
+
+### 9.7 State inspection endpoints
 
 | Method | Route | Description |
 |--------|-------|-------------|
@@ -725,14 +746,14 @@ Practical request/response examples are documented in `docs/api.md`.
 | `GET` | `/api/state/nodes/invalidated` | All nodes currently in `invalidated` state |
 | `GET` | `/api/state/layer/:depth/status` | Lock state + node states for a given depth |
 
-### 9.7 Dev utilities
+### 9.8 Dev utilities
 
 | Method | Route | Description |
 |--------|-------|-------------|
 | `POST` | `/api/dev/reset` | Wipe all application data (dev only — disabled in production) |
 | `POST` | `/api/dev/seed` | Seed Phase 1 URL shortener spec and transition to Phase 2 (dev only) |
 
-### 9.8 Response envelope
+### 9.9 Response envelope
 
 All endpoints return a consistent response shape:
 
@@ -776,12 +797,13 @@ These are the only remaining unresolved items as of last update:
 | # | Question | Where it surfaces |
 |---|----------|-------------------|
 | 11.1 | Additional syntax checker structural rules beyond the 6 defined | Section 6, step 4 |
-| 11.2 | Exact prompt text for all 7 prompts — structure defined, wording to be written and refined during implementation | Section 7.3 |
 | 11.3 | Prompt versioning — do we track prompts as part of the system? | Section 7 |
 | 11.5 | Graph library choice (graphology vs custom) | Section 8 |
 | 11.6 | LLM SDK (direct Azure REST vs OpenAI-compatible) | Section 8 |
 
-Items 11.1–11.3 are best resolved during implementation once the full system is visible. Items 11.5–11.6 are minor and can be decided at first implementation session.
+~~11.2 resolved:~~ All 8 prompts are implemented and refined — structure and wording both complete.
+
+Items 11.1, 11.3 are best resolved once the full system is in active use. Items 11.5–11.6 are minor and can be decided at first implementation session.
 
 ---
 
@@ -847,3 +869,10 @@ Items 11.1–11.3 are best resolved during implementation once the full system i
 | 2026-04-23 | `node_rewritten` event added to catalogue |
 | 2026-04-23 | Phase 2 loop updated: implementation error path now uses rewrite (Prompt 8) instead of bare retry |
 | 2026-04-23 | Leaf-confirmed nodes excluded from parent candidates when proposing next layer — prevents decomposing nodes already marked as leaves |
+| 2026-04-24 | Layer lock has three hard gates: P6 must have produced a `collective_vertical_passed` event, syntax check must have produced a `syntax_check_passed` event, and every node's most recent validation event must be `node_validation_passed` — partial passes are rejected |
+| 2026-04-24 | Leaf confirmation overrides use `{"overrides": {"nodeId": "leaf"}}` wrapper — not a flat top-level map |
+| 2026-04-24 | Traversal API body field is `origin_nodes` (array of node IDs to cascade from) — the traversal is named "upward" because the origin is above the failing node, but invalidation cascades downward from the origin through all its descendants |
+| 2026-04-24 | Pending leaf determinations persisted to layer definition record in DB — survive server restarts until confirmed |
+| 2026-04-24 | Re-proposal per parent: `POST /api/phase2/layer/:depth/nodes/repropose/parent/:parentId` accumulates proposals across multiple calls; `POST .../repropose/approve` commits all at once — enables targeted gap-filling without re-running the full layer |
+| 2026-04-24 | Manual node edit endpoint added: `PATCH /api/phase2/layer/:depth/node/:nodeId` — emits `human_override` event, intended as an escape hatch not a routine workflow |
+| 2026-04-24 | Open question 11.2 resolved — all 8 prompts implemented and refined |
