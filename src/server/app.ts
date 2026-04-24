@@ -25,11 +25,15 @@ import {
   confirmDiagnosis,
   determineLeafNodes,
   diagnoseNode,
+  editNode,
   getExitCheckStatus,
   generateLayerDefinition,
   lockPhase2,
   lockLayer,
   proposeLayerNodes,
+  reproposeParent,
+  approveReproposeParent,
+  rewriteNode,
   runCollectiveVerticalCheck,
   runLayerSyntaxCheck,
   traverseUpward,
@@ -283,6 +287,41 @@ export function createApp() {
     }
   });
 
+  app.post("/api/phase2/layer/:depth/nodes/repropose/parent/:parentId", async (req, res, next) => {
+    try {
+      const depth = parseDepth(req.params.depth);
+      if (depth === null) {
+        res.status(400).json({ ok: false, error: "Depth must be a non-negative integer." });
+        return;
+      }
+      const parentId = req.params.parentId;
+      if (!parentId) {
+        res.status(400).json({ ok: false, error: "Parent ID is required." });
+        return;
+      }
+      const rawStart = getLLMRawLogLength();
+      const result = await reproposeParent(depth, parentId);
+      const llmRaw = getLLMRawSince(rawStart)[0] ?? null;
+      res.json(ok({ depth, parent_id: parentId, nodes: result }, llmRaw));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/phase2/layer/:depth/nodes/repropose/approve", async (req, res, next) => {
+    try {
+      const depth = parseDepth(req.params.depth);
+      if (depth === null) {
+        res.status(400).json({ ok: false, error: "Depth must be a non-negative integer." });
+        return;
+      }
+      const result = await approveReproposeParent(depth);
+      res.json(ok(result));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/phase2/layer/:depth/validate/node/:nodeId", async (req, res, next) => {
     try {
       const depth = parseDepth(req.params.depth);
@@ -448,6 +487,44 @@ export function createApp() {
 
       const result = await confirmDiagnosis(nodeId, req.body ?? undefined);
       res.json(ok({ node_id: nodeId, ...result }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/phase2/diagnose/:nodeId/rewrite", async (req, res, next) => {
+    try {
+      const nodeId = req.params.nodeId;
+      if (!nodeId) {
+        res.status(400).json({ ok: false, error: "Node ID is required." });
+        return;
+      }
+      const rawStart = getLLMRawLogLength();
+      const result = await rewriteNode(nodeId);
+      const llmRaw = getLLMRawSince(rawStart)[0] ?? null;
+      res.json(ok({ node_id: nodeId, ...result }, llmRaw));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/phase2/layer/:depth/node/:nodeId", async (req, res, next) => {
+    try {
+      const nodeId = req.params.nodeId;
+      if (!nodeId) {
+        res.status(400).json({ ok: false, error: "Node ID is required." });
+        return;
+      }
+
+      const { intent, outputs, inputs } = req.body ?? {};
+
+      if (!intent && !inputs && !outputs) {
+        res.status(400).json({ ok: false, error: "At least one of intent, inputs, or outputs must be provided." });
+        return;
+      }
+
+      const result = await editNode(nodeId, { intent, inputs, outputs });
+      res.json(ok({ ...result }));
     } catch (error) {
       next(error);
     }

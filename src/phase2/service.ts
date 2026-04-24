@@ -27,8 +27,10 @@ import {
   updateNodeChecklistDraft,
   updateSession
 } from "../db/index.js";
+import { getEventsByType } from "../db/repositories/index.js";
 import { callLLMWithMessages } from "../llm/client.js";
 import { EventActor } from "../models/event.js";
+import { ArchNode } from "../models/archNode.js";
 import { AbstractionStack } from "../models/abstractionStack.js";
 import { LayerCriteriaDoc } from "../models/layerCriteriaDoc.js";
 import { ProblemSpec } from "../models/problemSpec.js";
@@ -48,11 +50,14 @@ import {
   promptLeafSystem,
   promptLeafUser,
   LeafDeterminationResponse,
+  PromptRewriteResponse,
   Prompt3Response,
   Prompt4Response,
   Prompt5Response,
   Prompt6Response,
   Prompt7Response,
+  promptRewriteSystem,
+  promptRewriteUser,
   StackLayerInput
 } from "./prompts.js";
 import { runSyntaxCheck, SyntaxCheckResult } from "./syntaxChecker.js";
@@ -62,6 +67,7 @@ const PHASE1_SPEC_ID = "spec-url-shortener";
 
 const pendingDefinitionByDepth = new Map<number, Prompt3Response>();
 const pendingNodesByDepth = new Map<number, Prompt4Response["nodes"]>();
+const pendingReproposeByDepth = new Map<number, Prompt4Response["nodes"]>();
 const pendingLeafByDepth = new Map<number, LeafDeterminationResponse>();
 
 export interface Phase2NodeView {
@@ -408,6 +414,20 @@ function validateLeafDeterminationResponse(raw: Record<string, unknown>): LeafDe
   return { nodes };
 }
 
+function validatePromptRewrite(raw: Record<string, unknown>): PromptRewriteResponse {
+  if (typeof raw.intent !== "string" || !raw.intent.trim())
+    throw new Error("Invalid rewrite response: intent must be a non-empty string.");
+  if (typeof raw.inputs !== "string" || !raw.inputs.trim())
+    throw new Error("Invalid rewrite response: inputs must be a non-empty string.");
+  if (typeof raw.outputs !== "string" || !raw.outputs.trim())
+    throw new Error("Invalid rewrite response: outputs must be a non-empty string.");
+  return {
+    intent: raw.intent.trim(),
+    inputs: raw.inputs.trim(),
+    outputs: raw.outputs.trim()
+  };
+}
+
 async function runClaimValidation(
   spec: ProblemSpec,
   node: { id: string; intent: string; inputs: string; outputs: string },
@@ -588,67 +608,6 @@ async function getParentLayerCriteriaDocContext(depth: number): Promise<Record<s
   };
 }
 
-export async function getOrCreateLayerDefinition(depth: number): Promise<LayerCriteriaDoc> {
-  await requirePhase1Spec();
-  const existing = await getLayerCriteriaDocByDepth(depth);
-
-  if (existing) {
-    return existing;
-  }
-
-  const spec = await requirePhase1Spec();
-  const session = await getCurrentSession();
-  const layers = await getSessionStackLayers(session);
-  const parentIntents = await getParentIntents(spec, depth);
-  const parentLayerCriteriaDoc = await getParentLayerCriteriaDocContext(depth);
-  const layerMeta = getCurrentLayerMeta(layers, depth);
-
-  const raw = await callLLMWithMessages<Record<string, unknown>>(
-    buildSimpleMessages(
-      prompt3System({
-        layerName: layerMeta.layerName,
-        depth,
-        totalLayers: layerMeta.totalLayers,
-        layerDescription: layerMeta.layerDescription
-      }),
-      prompt3User({
-        spec,
-        stack: layers,
-        depth,
-        parentIntents,
-        parentLayerCriteriaDoc,
-        existingNodesAtDepth: []
-      })
-    )
-  );
-
-  const parsed = validatePrompt3(raw);
-
-  const created = await createLayerCriteriaDoc({
-    id: `criteria-${depth}-${randomUUID()}`,
-    depth,
-    layer_name: parsed.layer_name,
-    responsibility_scope: parsed.responsibility_scope,
-    considerations: parsed.considerations,
-    out_of_scope: parsed.out_of_scope,
-    checklist_template: JSON.stringify(parsed.checklist_template),
-    locked: false
-  });
-
-  await emitEvent(
-    "layer_defined",
-    "llm",
-    {
-      depth,
-      layer_name: parsed.layer_name,
-      checklist_template: parsed.checklist_template
-    },
-    [created.id]
-  );
-
-  return created;
-}
-
 export async function generateLayerDefinition(depth: number): Promise<LayerCriteriaDoc> {
   await requirePhase1Spec();
 
@@ -683,8 +642,21 @@ export async function generateLayerDefinition(depth: number): Promise<LayerCrite
   const parsed = validatePrompt3(raw);
   pendingDefinitionByDepth.set(depth, parsed);
 
-  return {
-    id: `criteria-${depth}-pending`,
+  const existingDoc = await getLayerCriteriaDocByDepth(depth);
+
+  if (existingDoc && !existingDoc.locked) {
+    const updated = await updateLayerCriteriaDoc(existingDoc.id, {
+      layer_name: parsed.layer_name,
+      responsibility_scope: parsed.responsibility_scope,
+      considerations: parsed.considerations,
+      out_of_scope: parsed.out_of_scope,
+      checklist_template: JSON.stringify(parsed.checklist_template)
+    });
+    return updated ?? existingDoc;
+  }
+
+  return createLayerCriteriaDoc({
+    id: `criteria-${depth}-${randomUUID()}`,
     depth,
     layer_name: parsed.layer_name,
     responsibility_scope: parsed.responsibility_scope,
@@ -692,7 +664,7 @@ export async function generateLayerDefinition(depth: number): Promise<LayerCrite
     out_of_scope: parsed.out_of_scope,
     checklist_template: JSON.stringify(parsed.checklist_template),
     locked: false
-  };
+  });
 }
 
 export async function approveLayerDefinition(
@@ -708,16 +680,32 @@ export async function approveLayerDefinition(
     const out_of_scope = edits?.out_of_scope ?? pending.out_of_scope;
     const checklist_template = edits?.checklist_template ?? JSON.stringify(pending.checklist_template);
 
-    const created = await createLayerCriteriaDoc({
-      id: `criteria-${depth}-${randomUUID()}`,
-      depth,
-      layer_name,
-      responsibility_scope,
-      considerations,
-      out_of_scope,
-      checklist_template,
-      locked: true
-    });
+    const existingUnlocked = await getLayerCriteriaDocByDepth(depth);
+    let created: LayerCriteriaDoc;
+
+    if (existingUnlocked && !existingUnlocked.locked) {
+      const updated = await updateLayerCriteriaDoc(existingUnlocked.id, {
+        layer_name,
+        responsibility_scope,
+        considerations,
+        out_of_scope,
+        checklist_template,
+        locked: true
+      });
+      if (!updated) throw new Error(`Failed to approve layer definition at depth ${depth}.`);
+      created = updated;
+    } else {
+      created = await createLayerCriteriaDoc({
+        id: `criteria-${depth}-${randomUUID()}`,
+        depth,
+        layer_name,
+        responsibility_scope,
+        considerations,
+        out_of_scope,
+        checklist_template,
+        locked: true
+      });
+    }
 
     await emitEvent(
       "layer_defined",
@@ -802,45 +790,6 @@ export async function approveLayerDefinition(
   return updated;
 }
 
-export async function getOrCreateLayerNodes(depth: number): Promise<Phase2NodeView[]> {
-  await requirePhase1Spec();
-
-  const existingNodes = await getNodesByDepth(depth);
-  const existingDrafts = await getNodeChecklistDraftsByDepth(depth);
-
-  if (existingNodes.length && existingDrafts.length) {
-    return existingNodes.map((node) => ({
-      id: node.id,
-      intent: node.intent,
-      parents: node.parents,
-      inputs: node.inputs,
-      outputs: node.outputs,
-      edges: [],
-      checklist: parseChecklist(existingDrafts.find((draft) => draft.node_id === node.id)?.checklist ?? "[]"),
-      state: node.state,
-      leaf: node.leaf ?? null
-    }));
-  }
-
-  const proposedNodes = await proposeLayerNodes(depth);
-  await approveLayerNodes(depth);
-
-  const nodes = await getNodesByDepth(depth);
-  const drafts = await getNodeChecklistDraftsByDepth(depth);
-
-  return nodes.map((node) => ({
-    id: node.id,
-    intent: node.intent,
-    parents: node.parents,
-    inputs: node.inputs,
-    outputs: node.outputs,
-    edges: proposedNodes.find((n) => n.id === node.id)?.edges ?? [],
-    checklist: parseChecklist(drafts.find((draft) => draft.node_id === node.id)?.checklist ?? "[]"),
-    state: node.state,
-    leaf: node.leaf ?? null
-  }));
-}
-
 export async function proposeLayerNodes(depth: number): Promise<Phase2NodeView[]> {
   const spec = await requirePhase1Spec();
   const session = await getCurrentSession();
@@ -864,7 +813,15 @@ export async function proposeLayerNodes(depth: number): Promise<Phase2NodeView[]
   if (depth === 0) {
     parents.push({ id: "root", intent: spec.problem_statement });
   } else {
-    const parentNodes = await getNodesByDepth(depth - 1);
+    const allParentNodes = await getNodesByDepth(depth - 1);
+    const parentNodes = allParentNodes.filter((n) => n.leaf !== true);
+
+    if (parentNodes.length === 0) {
+      throw new Error(
+        `No decomposable nodes at depth ${depth - 1}. All nodes are confirmed leaf nodes.`
+      );
+    }
+
     for (const parentNode of parentNodes) {
       parents.push({
         id: parentNode.id,
@@ -924,210 +881,223 @@ export async function proposeLayerNodes(depth: number): Promise<Phase2NodeView[]
   }));
 }
 
+async function processProposedNodes(
+  depth: number,
+  nodes: Prompt4Response["nodes"],
+  spec: ProblemSpec
+): Promise<void> {
+  const edgeDedup = new Set<string>();
+
+  for (const nodeInput of nodes) {
+    if (nodeInput.claimed_from) {
+      const existing = await getArchNodeById(nodeInput.claimed_from);
+
+      if (!existing) throw new Error(`Claimed node ${nodeInput.claimed_from} not found.`);
+
+      const hasEdits =
+        nodeInput.proposed_edits !== null &&
+        (nodeInput.proposed_edits?.intent || nodeInput.proposed_edits?.inputs || nodeInput.proposed_edits?.outputs);
+
+      if (hasEdits) {
+        const proposedEdits = nodeInput.proposed_edits ?? {};
+        const editedNode = {
+          id: existing.id,
+          intent: proposedEdits.intent ?? existing.intent,
+          inputs: proposedEdits.inputs ?? existing.inputs,
+          outputs: proposedEdits.outputs ?? existing.outputs
+        };
+        const passed = await runClaimValidation(spec, editedNode, existing.parents, depth);
+
+        if (!passed) {
+          const newId = `${existing.id}-fork-${randomUUID().slice(0, 8)}`;
+          await createArchNode({
+            id: newId,
+            intent: editedNode.intent,
+            state: "pending",
+            depth,
+            parents: nodeInput.parents,
+            children: [],
+            edges: [],
+            inputs: editedNode.inputs,
+            outputs: editedNode.outputs
+          });
+          await emitEvent(
+            "node_claim_rejected",
+            "llm",
+            {
+              depth,
+              claimed_node_id: existing.id,
+              requested_by_parents: nodeInput.parents,
+              proposed_edits: nodeInput.proposed_edits,
+              new_node_id: newId
+            },
+            [existing.id, newId]
+          );
+          if (nodeInput.checklist.length) {
+            await createNodeChecklistDraft({
+              id: `draft-${randomUUID()}`,
+              depth,
+              node_id: newId,
+              checklist: JSON.stringify(nodeInput.checklist),
+              approved: false
+            });
+            await emitEvent(
+              "node_checklist_generated",
+              "llm",
+              { depth, node_id: newId, checklist: nodeInput.checklist },
+              [newId]
+            );
+          }
+          continue;
+        }
+
+        const updates: {
+          parents: string[];
+          intent?: string;
+          inputs?: string;
+          outputs?: string;
+        } = { parents: [...new Set([...existing.parents, ...nodeInput.parents])] as string[] };
+        if (proposedEdits.intent) updates.intent = proposedEdits.intent;
+        if (proposedEdits.inputs) updates.inputs = proposedEdits.inputs;
+        if (proposedEdits.outputs) updates.outputs = proposedEdits.outputs;
+        await updateArchNode(existing.id, updates);
+        await emitEvent(
+          "node_claimed",
+          "llm",
+          {
+            depth,
+            node_id: existing.id,
+            claimed_by_parent: nodeInput.parents,
+            proposed_edits: nodeInput.proposed_edits
+          },
+          [existing.id]
+        );
+      } else {
+        const allParents = [...new Set([...existing.parents, ...nodeInput.parents])];
+        const passed = await runClaimValidation(
+          spec,
+          {
+            id: existing.id,
+            intent: existing.intent,
+            inputs: existing.inputs,
+            outputs: existing.outputs
+          },
+          allParents,
+          depth
+        );
+
+        if (!passed) {
+          await emitEvent(
+            "node_claim_rejected",
+            "llm",
+            {
+              depth,
+              claimed_node_id: existing.id,
+              requested_by_parents: nodeInput.parents,
+              proposed_edits: null,
+              new_node_id: null
+            },
+            [existing.id]
+          );
+          continue;
+        }
+
+        await updateArchNode(existing.id, { parents: allParents });
+        await emitEvent(
+          "node_claimed",
+          "llm",
+          {
+            depth,
+            node_id: existing.id,
+            claimed_by_parent: nodeInput.parents,
+            proposed_edits: null
+          },
+          [existing.id]
+        );
+      }
+
+      continue;
+    }
+
+    await createArchNode({
+      id: nodeInput.id,
+      intent: nodeInput.intent,
+      state: "pending",
+      depth,
+      parents: nodeInput.parents,
+      children: [],
+      edges: [],
+      inputs: nodeInput.inputs,
+      outputs: nodeInput.outputs
+    });
+
+    await emitEvent("node_proposed", "llm", { depth, node_id: nodeInput.id }, [nodeInput.id]);
+
+    await createNodeChecklistDraft({
+      id: `draft-${randomUUID()}`,
+      depth,
+      node_id: nodeInput.id,
+      checklist: JSON.stringify(nodeInput.checklist),
+      approved: false
+    });
+
+    await emitEvent(
+      "node_checklist_generated",
+      "llm",
+      { depth, node_id: nodeInput.id, checklist: nodeInput.checklist },
+      [nodeInput.id]
+    );
+
+    for (const edge of nodeInput.edges) {
+      const pairKey = [nodeInput.id, edge.target].sort().join("::");
+      const edgeKey = `${pairKey}::${edge.interface}::${edge.direction}`;
+
+      if (edgeDedup.has(edgeKey)) {
+        continue;
+      }
+
+      edgeDedup.add(edgeKey);
+
+      const edgeId = `edge-${randomUUID()}`;
+
+      await createArchEdge({
+        id: edgeId,
+        source: nodeInput.id,
+        target: edge.target,
+        interface: edge.interface,
+        direction: edge.direction
+      });
+
+      await emitEvent(
+        "edge_proposed",
+        "llm",
+        {
+          edge_id: edgeId,
+          source: nodeInput.id,
+          target: edge.target,
+          interface: edge.interface,
+          direction: edge.direction,
+          depth
+        },
+        [nodeInput.id, edge.target]
+      );
+    }
+  }
+}
+
 export async function approveLayerNodes(depth: number): Promise<{ approved: true }> {
   const spec = await requirePhase1Spec();
   const pendingNodes = pendingNodesByDepth.get(depth);
 
   if (pendingNodes?.length) {
-    const edgeDedup = new Set<string>();
-
-    for (const nodeInput of pendingNodes) {
-      if (nodeInput.claimed_from) {
-        const existing = await getArchNodeById(nodeInput.claimed_from);
-
-        if (!existing) throw new Error(`Claimed node ${nodeInput.claimed_from} not found.`);
-
-        const hasEdits =
-          nodeInput.proposed_edits !== null &&
-          (nodeInput.proposed_edits?.intent || nodeInput.proposed_edits?.inputs || nodeInput.proposed_edits?.outputs);
-
-        if (hasEdits) {
-          const proposedEdits = nodeInput.proposed_edits ?? {};
-          const editedNode = {
-            id: existing.id,
-            intent: proposedEdits.intent ?? existing.intent,
-            inputs: proposedEdits.inputs ?? existing.inputs,
-            outputs: proposedEdits.outputs ?? existing.outputs
-          };
-          const passed = await runClaimValidation(spec, editedNode, existing.parents, depth);
-
-          if (!passed) {
-            const newId = `${existing.id}-fork-${randomUUID().slice(0, 8)}`;
-            await createArchNode({
-              id: newId,
-              intent: editedNode.intent,
-              state: "pending",
-              depth,
-              parents: nodeInput.parents,
-              children: [],
-              edges: [],
-              inputs: editedNode.inputs,
-              outputs: editedNode.outputs
-            });
-            await emitEvent(
-              "node_claim_rejected",
-              "llm",
-              {
-                depth,
-                claimed_node_id: existing.id,
-                requested_by_parents: nodeInput.parents,
-                proposed_edits: nodeInput.proposed_edits,
-                new_node_id: newId
-              },
-              [existing.id, newId]
-            );
-            if (nodeInput.checklist.length) {
-              await createNodeChecklistDraft({
-                id: `draft-${randomUUID()}`,
-                depth,
-                node_id: newId,
-                checklist: JSON.stringify(nodeInput.checklist),
-                approved: false
-              });
-              await emitEvent(
-                "node_checklist_generated",
-                "llm",
-                { depth, node_id: newId, checklist: nodeInput.checklist },
-                [newId]
-              );
-            }
-            continue;
-          }
-
-          const updates: {
-            parents: string[];
-            intent?: string;
-            inputs?: string;
-            outputs?: string;
-          } = { parents: [...new Set([...existing.parents, ...nodeInput.parents])] as string[] };
-          if (proposedEdits.intent) updates.intent = proposedEdits.intent;
-          if (proposedEdits.inputs) updates.inputs = proposedEdits.inputs;
-          if (proposedEdits.outputs) updates.outputs = proposedEdits.outputs;
-          await updateArchNode(existing.id, updates);
-          await emitEvent(
-            "node_claimed",
-            "llm",
-            {
-              depth,
-              node_id: existing.id,
-              claimed_by_parent: nodeInput.parents,
-              proposed_edits: nodeInput.proposed_edits
-            },
-            [existing.id]
-          );
-        } else {
-          const allParents = [...new Set([...existing.parents, ...nodeInput.parents])];
-          const passed = await runClaimValidation(
-            spec,
-            {
-              id: existing.id,
-              intent: existing.intent,
-              inputs: existing.inputs,
-              outputs: existing.outputs
-            },
-            allParents,
-            depth
-          );
-
-          if (!passed) {
-            await emitEvent(
-              "node_claim_rejected",
-              "llm",
-              {
-                depth,
-                claimed_node_id: existing.id,
-                requested_by_parents: nodeInput.parents,
-                proposed_edits: null,
-                new_node_id: null
-              },
-              [existing.id]
-            );
-            continue;
-          }
-
-          await updateArchNode(existing.id, { parents: allParents });
-          await emitEvent(
-            "node_claimed",
-            "llm",
-            {
-              depth,
-              node_id: existing.id,
-              claimed_by_parent: nodeInput.parents,
-              proposed_edits: null
-            },
-            [existing.id]
-          );
-        }
-
-        continue;
-      }
-
-      await createArchNode({
-        id: nodeInput.id,
-        intent: nodeInput.intent,
-        state: "pending",
-        depth,
-        parents: nodeInput.parents,
-        children: [],
-        edges: [],
-        inputs: nodeInput.inputs,
-        outputs: nodeInput.outputs
-      });
-
-      await emitEvent("node_proposed", "llm", { depth, node_id: nodeInput.id }, [nodeInput.id]);
-
-      await createNodeChecklistDraft({
-        id: `draft-${randomUUID()}`,
-        depth,
-        node_id: nodeInput.id,
-        checklist: JSON.stringify(nodeInput.checklist),
-        approved: false
-      });
-
-      await emitEvent(
-        "node_checklist_generated",
-        "llm",
-        { depth, node_id: nodeInput.id, checklist: nodeInput.checklist },
-        [nodeInput.id]
-      );
-
-      for (const edge of nodeInput.edges) {
-        const pairKey = [nodeInput.id, edge.target].sort().join("::");
-        const edgeKey = `${pairKey}::${edge.interface}::${edge.direction}`;
-
-        if (edgeDedup.has(edgeKey)) {
-          continue;
-        }
-
-        edgeDedup.add(edgeKey);
-
-        const edgeId = `edge-${randomUUID()}`;
-
-        await createArchEdge({
-          id: edgeId,
-          source: nodeInput.id,
-          target: edge.target,
-          interface: edge.interface,
-          direction: edge.direction
-        });
-
-        await emitEvent(
-          "edge_proposed",
-          "llm",
-          {
-            edge_id: edgeId,
-            source: nodeInput.id,
-            target: edge.target,
-            interface: edge.interface,
-            direction: edge.direction,
-            depth
-          },
-          [nodeInput.id, edge.target]
-        );
-      }
-    }
+    await processProposedNodes(depth, pendingNodes, spec);
 
     pendingNodesByDepth.delete(depth);
+  } else {
+    const existingNodes = await getNodesByDepth(depth);
+    if (!existingNodes.length) {
+      throw new Error(`No nodes proposed for depth ${depth}. Call proposeLayerNodes first.`);
+    }
   }
 
   const drafts = await getNodeChecklistDraftsByDepth(depth);
@@ -1135,6 +1105,112 @@ export async function approveLayerNodes(depth: number): Promise<{ approved: true
   for (const draft of drafts) {
     await updateNodeChecklistDraft(draft.id, { approved: true });
     await emitEvent("node_checklist_approved", "human", { depth, node_id: draft.node_id }, [draft.node_id]);
+  }
+
+  return { approved: true };
+}
+
+export async function reproposeParent(
+  depth: number,
+  parentId: string
+): Promise<Phase2NodeView[]> {
+  const spec = await requirePhase1Spec();
+  const session = await getCurrentSession();
+  const layers = await getSessionStackLayers(session);
+  const definition = await getLayerCriteriaDocByDepth(depth);
+
+  if (!definition || !definition.locked) {
+    throw new Error("Layer definition must be approved before proposing nodes.");
+  }
+
+  const layerMeta = getCurrentLayerMeta(layers, depth);
+  const layerCriteriaDoc: Prompt3Response = {
+    layer_name: definition.layer_name,
+    responsibility_scope: definition.responsibility_scope,
+    considerations: definition.considerations,
+    out_of_scope: definition.out_of_scope,
+    checklist_template: JSON.parse(definition.checklist_template)
+  };
+
+  let parent: { id: string; intent: string; inputs: string; outputs: string } | { id: "root"; intent: string };
+  if (parentId === "root") {
+    parent = { id: "root", intent: spec.problem_statement };
+  } else {
+    const parentNode = await getArchNodeById(parentId);
+    if (!parentNode) throw new Error(`Parent node ${parentId} not found.`);
+    parent = {
+      id: parentNode.id,
+      intent: parentNode.intent,
+      inputs: parentNode.inputs,
+      outputs: parentNode.outputs
+    };
+  }
+
+  const existingNodes = await getNodesByDepth(depth);
+  const existingNodesAtDepth = existingNodes.map((n) => ({
+    id: n.id,
+    intent: n.intent,
+    inputs: n.inputs,
+    outputs: n.outputs,
+    parents: n.parents
+  }));
+
+  const raw = await callLLMWithMessages<Record<string, unknown>>(
+    buildSimpleMessages(
+      prompt4System({
+        layerName: layerMeta.layerName,
+        depth,
+        totalLayers: layerMeta.totalLayers,
+        layerDescription: layerMeta.layerDescription
+      }),
+      prompt4User({
+        spec,
+        stack: layers,
+        depth,
+        parent,
+        layerCriteriaDoc,
+        existingNodesAtDepth
+      })
+    )
+  );
+
+  const parsed = validatePrompt4(raw);
+
+  const existing = pendingReproposeByDepth.get(depth) ?? [];
+  pendingReproposeByDepth.set(depth, [...existing, ...parsed.nodes]);
+
+  return parsed.nodes.map((node) => ({
+    id: node.id,
+    intent: node.intent,
+    parents: node.parents,
+    inputs: node.inputs,
+    outputs: node.outputs,
+    edges: node.edges,
+    checklist: node.checklist,
+    state: "pending",
+    leaf: null
+  }));
+}
+
+export async function approveReproposeParent(depth: number): Promise<{ approved: true }> {
+  const spec = await requirePhase1Spec();
+  const pendingNodes = pendingReproposeByDepth.get(depth);
+
+  if (!pendingNodes?.length) {
+    throw new Error(`No re-proposed nodes for depth ${depth}. Call reproposeParent first.`);
+  }
+
+  await processProposedNodes(depth, pendingNodes, spec);
+  pendingReproposeByDepth.delete(depth);
+
+  const drafts = await getNodeChecklistDraftsByDepth(depth);
+  const reproposeNodeIds = new Set(pendingNodes.map((n) => n.id));
+
+  for (const draft of drafts) {
+    if (reproposeNodeIds.has(draft.node_id) && !draft.approved) {
+      await updateNodeChecklistDraft(draft.id, { approved: true });
+      await emitEvent("node_checklist_approved", "human", { depth, node_id: draft.node_id }, [draft.node_id]);
+    }
   }
 
   return { approved: true };
@@ -1324,6 +1400,50 @@ export async function lockLayer(depth: number): Promise<{ locked: true; node_cou
     throw new Error(`No nodes found at depth ${depth}.`);
   }
 
+  const collectiveEvents = await getEventsByType("collective_vertical_passed");
+  const collectivePassed = collectiveEvents.some((e) => {
+    try {
+      return (JSON.parse(e.payload) as Record<string, unknown>).depth === depth;
+    } catch {
+      return false;
+    }
+  });
+  if (!collectivePassed) {
+    throw new Error(
+      `Cannot lock layer ${depth}: collective vertical check has not passed. Run runCollectiveVerticalCheck first.`
+    );
+  }
+
+  const syntaxEvents = await getEventsByType("syntax_check_passed");
+  const syntaxPassed = syntaxEvents.some((e) => {
+    try {
+      return (JSON.parse(e.payload) as Record<string, unknown>).depth === depth;
+    } catch {
+      return false;
+    }
+  });
+  if (!syntaxPassed) {
+    throw new Error(
+      `Cannot lock layer ${depth}: syntax check has not passed. Run runLayerSyntaxCheck first.`
+    );
+  }
+
+  const blockingNodes: string[] = [];
+  for (const node of nodes) {
+    const events = await getEventsByNodeId(node.id);
+    const latestValidation = [...events]
+      .reverse()
+      .find((e) => e.type === "node_validation_passed" || e.type === "node_validation_failed");
+    if (!latestValidation || latestValidation.type !== "node_validation_passed") {
+      blockingNodes.push(node.id);
+    }
+  }
+  if (blockingNodes.length > 0) {
+    throw new Error(
+      `Cannot lock layer ${depth}: ${blockingNodes.length} node(s) have not passed validation: ${blockingNodes.join(", ")}`
+    );
+  }
+
   for (const node of nodes) {
     await updateArchNode(node.id, { state: "locked" });
     await emitEvent("node_locked", "llm", { depth, node_id: node.id }, [node.id]);
@@ -1339,7 +1459,7 @@ export async function lockLayer(depth: number): Promise<{ locked: true; node_cou
 
 export async function determineLeafNodes(depth: number): Promise<LeafDeterminationResponse> {
   const spec = await requirePhase1Spec();
-  const nodes = await getNodesByDepth(depth);
+  const nodes = (await getNodesByDepth(depth)).filter((n) => n.state === "locked");
 
   if (!nodes.length) {
     throw new Error(`No nodes found at depth ${depth}.`);
@@ -1379,6 +1499,13 @@ export async function determineLeafNodes(depth: number): Promise<LeafDeterminati
 
   pendingLeafByDepth.set(depth, result);
 
+  const doc = await getLayerCriteriaDocByDepth(depth);
+  if (doc) {
+    await updateLayerCriteriaDoc(doc.id, {
+      pending_leaf_determinations: JSON.stringify(result)
+    });
+  }
+
   return result;
 }
 
@@ -1386,9 +1513,17 @@ export async function confirmLeafNodes(
   depth: number,
   overrides?: Record<string, "leaf" | "decompose_further">
 ): Promise<LeafDeterminationResponse> {
-  const base = pendingLeafByDepth.get(depth);
-  if (!base) {
-    throw new Error(`No pending leaf determination for depth ${depth}. Call determineLeafNodes first.`);
+  const inMemory = pendingLeafByDepth.get(depth);
+  let base: LeafDeterminationResponse;
+
+  if (!inMemory) {
+    const doc = await getLayerCriteriaDocByDepth(depth);
+    if (!doc?.pending_leaf_determinations) {
+      throw new Error(`No pending leaf determination for depth ${depth}. Call determineLeafNodes first.`);
+    }
+    base = JSON.parse(doc.pending_leaf_determinations) as LeafDeterminationResponse;
+  } else {
+    base = inMemory;
   }
 
   const resolved: LeafDeterminationResponse = {
@@ -1420,18 +1555,35 @@ export async function confirmLeafNodes(
     );
   }
 
+  const doc = await getLayerCriteriaDocByDepth(depth);
+  if (doc) {
+    await updateLayerCriteriaDoc(doc.id, { pending_leaf_determinations: null });
+  }
+
   pendingLeafByDepth.delete(depth);
 
   return resolved;
 }
 
-export async function getExitCheckStatus(): Promise<{ complete: boolean; decompose_further_ids: string[] }> {
-  const allNodes: Awaited<ReturnType<typeof getNodesByDepth>> = [];
+async function getAllNodes(): Promise<ArchNode[]> {
+  const all: ArchNode[] = [];
+  let emptyStreak = 0;
 
-  for (let depth = 0; depth <= 9; depth += 1) {
+  for (let depth = 0; emptyStreak < 2; depth += 1) {
     const atDepth = await getNodesByDepth(depth);
-    allNodes.push(...atDepth);
+    if (atDepth.length === 0) {
+      emptyStreak += 1;
+    } else {
+      emptyStreak = 0;
+      all.push(...atDepth);
+    }
   }
+
+  return all;
+}
+
+export async function getExitCheckStatus(): Promise<{ complete: boolean; decompose_further_ids: string[] }> {
+  const allNodes = await getAllNodes();
 
   const childrenMap = new Map<string, string[]>();
   for (const node of allNodes) {
@@ -1470,15 +1622,7 @@ export async function lockPhase2(): Promise<{ locked: true }> {
 export async function diagnoseNode(nodeId: string): Promise<Prompt7Response> {
   const spec = await requirePhase1Spec();
 
-  let node: Awaited<ReturnType<typeof getArchNodeById>> = null;
-  for (let depth = 0; depth <= 9; depth += 1) {
-    const atDepth = await getNodesByDepth(depth);
-    const found = atDepth.find((n) => n.id === nodeId) ?? null;
-    if (found) {
-      node = found;
-      break;
-    }
-  }
+  const node = await getArchNodeById(nodeId);
 
   if (!node) {
     throw new Error(`Node ${nodeId} not found.`);
@@ -1600,28 +1744,191 @@ export async function diagnoseNode(nodeId: string): Promise<Prompt7Response> {
   return result;
 }
 
+export async function rewriteNode(
+  nodeId: string
+): Promise<{ rewritten: PromptRewriteResponse; validation: Prompt5Response }> {
+  const spec = await requirePhase1Spec();
+
+  const node = await getArchNodeById(nodeId);
+  if (!node) throw new Error(`Node ${nodeId} not found.`);
+
+  const parentNodes = await getNodeParents(nodeId);
+  const siblings = await getNodeSiblings(nodeId);
+
+  const drafts = await getNodeChecklistDraftsByDepth(node.depth);
+  const draft = drafts.find((d) => d.node_id === nodeId);
+  const checklist = draft ? parseChecklist(draft.checklist) : [];
+
+  if (!checklist.length) throw new Error(`No checklist found for node ${nodeId}.`);
+
+  const events = await getEventsByNodeId(nodeId);
+  const latestFailedValidation = [...events]
+    .reverse()
+    .find((e) => e.type === "node_validation_failed");
+
+  if (!latestFailedValidation) {
+    throw new Error(
+      `No failed validation found for node ${nodeId}. Run validateNode first.`
+    );
+  }
+
+  let failedResults: Array<{ item: string; passed: boolean; reasoning: string }> = [];
+  try {
+    const payload = JSON.parse(latestFailedValidation.payload) as Record<string, unknown>;
+    failedResults = Array.isArray(payload.results)
+      ? payload.results
+          .map((entry) => {
+            if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+            const e = entry as Record<string, unknown>;
+            const item = typeof e.item === "string" ? e.item : "";
+            const passed = typeof e.passed === "boolean" ? e.passed : false;
+            const reasoning = typeof e.reasoning === "string" ? e.reasoning : "";
+            if (!item || !reasoning) return null;
+            return { item, passed, reasoning };
+          })
+          .filter((r): r is { item: string; passed: boolean; reasoning: string } => r !== null)
+      : [];
+  } catch {
+    failedResults = [];
+  }
+
+  const layerDefinition = await getLayerCriteriaDocByDepth(node.depth);
+  if (!layerDefinition) throw new Error(`No layer definition found at depth ${node.depth}.`);
+
+  const layerCriteriaDoc: Prompt3Response = {
+    layer_name: layerDefinition.layer_name,
+    responsibility_scope: layerDefinition.responsibility_scope,
+    considerations: layerDefinition.considerations,
+    out_of_scope: layerDefinition.out_of_scope,
+    checklist_template: JSON.parse(layerDefinition.checklist_template)
+  };
+
+  const session = await getCurrentSession();
+  const stack = await getSessionStackLayers(session);
+
+  const raw = await callLLMWithMessages<Record<string, unknown>>(
+    buildSimpleMessages(
+      promptRewriteSystem(),
+      promptRewriteUser({
+        spec,
+        node: { id: node.id, intent: node.intent, inputs: node.inputs, outputs: node.outputs },
+        parentNodes: parentNodes.map((p) => ({
+          id: p.id, intent: p.intent, inputs: p.inputs, outputs: p.outputs
+        })),
+        siblings: siblings.map((s) => ({
+          id: s.id, intent: s.intent, inputs: s.inputs, outputs: s.outputs
+        })),
+        failedResults,
+        layerCriteriaDoc,
+        stack
+      })
+    )
+  );
+
+  const rewritten = validatePromptRewrite(raw);
+  const old = { intent: node.intent, inputs: node.inputs, outputs: node.outputs };
+
+  await updateArchNode(nodeId, {
+    intent: rewritten.intent,
+    inputs: rewritten.inputs,
+    outputs: rewritten.outputs
+  });
+
+  await emitEvent(
+    "node_rewritten",
+    "llm",
+    { node_id: nodeId, old, rewritten },
+    [nodeId]
+  );
+
+  const validation = await validateNode(node.depth, nodeId);
+
+  return { rewritten, validation };
+}
+
+export async function editNode(
+  nodeId: string,
+  fields: { intent?: string; inputs?: string; outputs?: string }
+): Promise<ArchNode> {
+  if (!fields.intent && !fields.inputs && !fields.outputs) {
+    throw new Error("At least one of intent, inputs, or outputs must be provided.");
+  }
+
+  const node = await getArchNodeById(nodeId);
+  if (!node) throw new Error(`Node ${nodeId} not found.`);
+
+  const updates: { intent?: string; inputs?: string; outputs?: string } = {};
+  if (fields.intent !== undefined) updates.intent = fields.intent.trim();
+  if (fields.inputs !== undefined) updates.inputs = fields.inputs.trim();
+  if (fields.outputs !== undefined) updates.outputs = fields.outputs.trim();
+
+  const emptyFields = Object.entries(updates)
+    .filter(([, v]) => typeof v === "string" && v.length === 0)
+    .map(([k]) => k);
+
+  if (emptyFields.length > 0) {
+    throw new Error(`Field(s) cannot be empty after trimming: ${emptyFields.join(", ")}`);
+  }
+
+  const updated = await updateArchNode(nodeId, updates);
+  if (!updated) throw new Error(`Failed to update node ${nodeId}.`);
+
+  await emitEvent(
+    "human_override",
+    "human",
+    { node_id: nodeId, changes: updates },
+    [nodeId]
+  );
+
+  return updated;
+}
+
 export async function confirmDiagnosis(
   nodeId: string,
   override?: Partial<Pick<Prompt7Response, "classification" | "origin_nodes" | "suggested_action">>
 ): Promise<Prompt7Response> {
-  const base = await diagnoseNode(nodeId);
+  const events = await getEventsByNodeId(nodeId);
+  const diagnosisEvent = [...events].reverse().find((e) => e.type === "failure_diagnosed");
+
+  if (!diagnosisEvent) {
+    throw new Error(`No diagnosis found for node ${nodeId}. Call diagnoseNode first.`);
+  }
+
+  let baseParsed: Prompt7Response;
+  try {
+    const payload = JSON.parse(diagnosisEvent.payload) as Record<string, unknown>;
+    baseParsed = {
+      classification:
+        payload.classification === "design" || payload.classification === "implementation"
+          ? payload.classification
+          : "implementation",
+      reasoning: typeof payload.reasoning === "string" ? payload.reasoning : "",
+      origin_nodes: Array.isArray(payload.origin_nodes)
+        ? payload.origin_nodes.filter((id): id is string => typeof id === "string")
+        : [],
+      suggested_action:
+        typeof payload.suggested_action === "string" ? payload.suggested_action : ""
+    };
+  } catch {
+    throw new Error(`Failed to parse diagnosis for node ${nodeId}.`);
+  }
 
   const resolved: Prompt7Response = {
     classification: override?.classification === "design" || override?.classification === "implementation"
       ? override.classification
-      : base.classification,
-    reasoning: base.reasoning,
+      : baseParsed.classification,
+    reasoning: baseParsed.reasoning,
     origin_nodes: Array.isArray(override?.origin_nodes)
       ? override.origin_nodes.filter((id): id is string => typeof id === "string")
-      : base.origin_nodes,
+      : baseParsed.origin_nodes,
     suggested_action:
-      typeof override?.suggested_action === "string" ? override.suggested_action : base.suggested_action
+      typeof override?.suggested_action === "string" ? override.suggested_action : baseParsed.suggested_action
   };
 
   const wasOverridden =
-    (override?.classification !== undefined && override.classification !== base.classification) ||
+    (override?.classification !== undefined && override.classification !== baseParsed.classification) ||
     override?.origin_nodes !== undefined ||
-    (override?.suggested_action !== undefined && override.suggested_action !== base.suggested_action);
+    (override?.suggested_action !== undefined && override.suggested_action !== baseParsed.suggested_action);
 
   if (wasOverridden) {
     await emitEvent(
@@ -1649,22 +1956,13 @@ export async function confirmDiagnosis(
     );
   }
 
-  if (resolved.classification === "design" && resolved.origin_nodes.length > 0) {
-    await traverseUpward(resolved.origin_nodes);
-  }
-
   return resolved;
 }
 
 export async function traverseUpward(originNodeIds: string[]): Promise<{ invalidated: string[] }> {
   await emitEvent("upward_traversal_triggered", "human", { origin_nodes: originNodeIds }, []);
 
-  const allNodes: Awaited<ReturnType<typeof getNodesByDepth>> = [];
-
-  for (let depth = 0; depth <= 9; depth += 1) {
-    const atDepth = await getNodesByDepth(depth);
-    allNodes.push(...atDepth);
-  }
+  const allNodes = await getAllNodes();
 
   const childrenMap = new Map<string, string[]>();
   for (const node of allNodes) {

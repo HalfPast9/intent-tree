@@ -15,7 +15,11 @@ function mapCriteriaDoc(props: Record<string, unknown>): LayerCriteriaDoc {
     considerations: String(props.considerations),
     out_of_scope: String(props.out_of_scope),
     checklist_template: String(props.checklist_template),
-    locked: Boolean(props.locked)
+    locked: Boolean(props.locked),
+    pending_leaf_determinations:
+      props.pending_leaf_determinations != null
+        ? String(props.pending_leaf_determinations)
+        : null
   };
 }
 

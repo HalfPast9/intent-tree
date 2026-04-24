@@ -370,6 +370,61 @@ export function promptLeafUser(args: {
   ].join("\n");
 }
 
+export interface PromptRewriteResponse {
+  intent: string;
+  inputs: string;
+  outputs: string;
+}
+
+export function promptRewriteSystem(): string {
+  return [
+    "You are the Node Rewriter for Intent Tree.",
+    "A node failed checklist validation. Rewrite its intent, inputs, and outputs to fix the specific failures.",
+    "Rules:",
+    "- Fix ONLY the failing items. Every item that currently passes must still pass after your rewrite - the reasoning for each passing item tells you exactly what property of the node satisfies it.",
+    "- Stay within the layer's responsibility scope - do not include anything listed in out_of_scope.",
+    "- The rewritten node must still serve its parent's intent.",
+    "- inputs/outputs must remain at the abstraction level appropriate for this layer.",
+    'Return only JSON: { "intent": "...", "inputs": "...", "outputs": "..." }'
+  ].join("\n");
+}
+
+export function promptRewriteUser(args: {
+  spec: ProblemSpec;
+  node: { id: string; intent: string; inputs: string; outputs: string };
+  parentNodes: Array<{ id: string; intent: string; inputs: string; outputs: string }>;
+  siblings: Array<{ id: string; intent: string; inputs: string; outputs: string }>;
+  failedResults: Array<{ item: string; passed: boolean; reasoning: string }>;
+  layerCriteriaDoc: Prompt3Response;
+  stack: StackLayerInput[];
+}): string {
+  return [
+    "Phase 1 spec:",
+    JSON.stringify(phase1View(args.spec), null, 2),
+    "",
+    "FAILED NODE (to rewrite):",
+    JSON.stringify(args.node, null, 2),
+    "",
+    "MUST FIX - these checklist items are currently FAILING. Your rewrite must address each one:",
+    JSON.stringify(args.failedResults.filter((r) => !r.passed), null, 2),
+    "",
+    "MUST PRESERVE - these checklist items are currently PASSING. Your rewrite must continue to satisfy every one of them. The 'reasoning' field explains exactly what property of the current node makes it pass - do not change that property:",
+    JSON.stringify(args.failedResults.filter((r) => r.passed), null, 2),
+    "",
+    "Parent nodes:",
+    JSON.stringify(args.parentNodes, null, 2),
+    "",
+    "Sibling nodes (same parent, same depth):",
+    JSON.stringify(args.siblings, null, 2),
+    "",
+    "Layer definition:",
+    JSON.stringify(args.layerCriteriaDoc, null, 2),
+    "",
+    "Stack:",
+    JSON.stringify(args.stack, null, 2)
+  ].join("\n");
+}
+
 export function buildSimpleMessages(system: string, user: string): LLMMessage[] {
   return [
     { role: "system", content: system },

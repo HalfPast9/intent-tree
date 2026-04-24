@@ -1,5 +1,5 @@
 # Intent Tree — Technical Specification
-> V1 build target. Last updated: 2026-04-22.
+> V1 build target. Last updated: 2026-04-23.
 
 ---
 
@@ -238,10 +238,13 @@ START OF LAYER
 │   │
 │   └─ IF FAIL (any node fails checklist):
 │         LLM diagnoses failure type with reasoning:
-│           - Implementation error → retry this node
-│           - Design error → surface diagnosis + reasoning to user
+│           - Implementation error → node's own definition is wrong, can be fixed locally
+│           - Design error → problem originates in one or more ancestor nodes
 │         User confirms or overrides diagnosis.  ← HUMAN GATE
-│           - Confirmed implementation → retry
+│           - Confirmed implementation → REWRITE THIS NODE
+│               LLM rewrites the node's intent, inputs, and outputs based on the
+│               failed checklist items (Prompt 8). Auto-revalidates after rewrite.
+│               If rewrite passes → continue. If it fails again → re-diagnose.
 │           - Confirmed design → UPWARD TRAVERSAL
 │               LLM identifies the origin nodes (can be anywhere from direct parents
 │               to Phase 1 spec — multiple origins possible). All nodes from each
@@ -303,7 +306,7 @@ Each call type receives a different payload — purpose-built, not a generic dum
 
 ### 7.3 Prompt Catalogue
 
-Seven distinct prompts. Each defined by what it receives, what it returns, and format.
+Eight distinct prompts. Each defined by what it receives, what it returns, and format.
 
 ---
 
@@ -517,6 +520,33 @@ Returns:
 
 ---
 
+**Prompt 8 — Node rewrite** (implementation error repair)
+
+Fires when a node fails validation and P7 classifies the failure as an implementation error. Rewrites the node's definition in place — no subtree invalidation. Auto-revalidates after rewriting.
+
+Receives:
+- Full Phase 1 spec
+- Failed node (id, intent, inputs, outputs)
+- Failed checklist results (which items failed + reasoning)
+- All checklist results (for context on what passed — preserve those)
+- All parent nodes
+- Siblings at same depth
+- Layer definition
+- Current stack
+
+Returns:
+```json
+{
+  "intent": "rewritten intent",
+  "inputs": "rewritten inputs",
+  "outputs": "rewritten outputs"
+}
+```
+
+Rules: only change what failed; preserve what already passed; stay within the layer's `out_of_scope`; the rewritten node must still serve every parent's intent. After the rewrite, the system auto-runs Prompt 5 on the updated node. If it fails again, the diagnosis cycle restarts.
+
+---
+
 ## 8. Tech Stack
 
 | Concern | Decision | Rationale |
@@ -555,7 +585,7 @@ Every action in the system is stored as an immutable event node in Neo4j. Curren
 - Full system timeline: `MATCH (e:Event) RETURN e ORDER BY e.timestamp`
 - All validation failures: `MATCH (e:Event {type: 'node_validation_failed'}) RETURN e`
 
-**Event type catalogue (~35 types):**
+**Event type catalogue (~36 types):**
 
 *Phase 1*
 | Event | Actor | Description |
@@ -592,6 +622,7 @@ Every action in the system is stored as an immutable event node in Neo4j. Curren
 | `node_locked` | llm | Node state set to locked |
 | `node_leaf_determined` | llm | LLM classified node as leaf or decompose-further with reasoning |
 | `node_leaf_confirmed` | human | Human confirmed or overrode leaf determination |
+| `node_rewritten` | llm | Node intent/inputs/outputs rewritten by Prompt 8 to fix failed checklist items — payload includes old and new values |
 | `node_invalidated` | llm \| human | Node state set to invalidated — payload includes reason |
 
 *Edges*
@@ -680,6 +711,7 @@ Practical request/response examples are documented in `docs/api.md`.
 |--------|-------|-------------|
 | `POST` | `/api/phase2/diagnose/:nodeId` | Run Prompt 7 failure diagnosis, return classification + origin nodes + raw LLM output |
 | `POST` | `/api/phase2/diagnose/:nodeId/confirm` | Human confirms or overrides diagnosis |
+| `POST` | `/api/phase2/diagnose/:nodeId/rewrite` | Run Prompt 8 — rewrite node intent/inputs/outputs based on failed checklist items, auto-revalidates |
 | `POST` | `/api/phase2/traverse/upward` | Trigger upward traversal from given origin nodes, invalidate affected nodes |
 
 ### 9.6 State inspection endpoints
@@ -811,3 +843,7 @@ Items 11.1–11.3 are best resolved during implementation once the full system i
 | 2026-04-22 | Syntax checker rule "every non-leaf node has at least one edge" dropped — collective vertical catches meaningful version |
 | 2026-04-22 | Syntax checker down to 6 rules from 7 |
 | 2026-04-22 | Context assembly in Section 4.5 updated to canonical list with per-prompt subsetting in Section 7 |
+| 2026-04-23 | Prompt 8 (Node Rewrite) added — implementation error repair path: rewrites node intent/inputs/outputs in place based on failed checklist items, auto-revalidates |
+| 2026-04-23 | `node_rewritten` event added to catalogue |
+| 2026-04-23 | Phase 2 loop updated: implementation error path now uses rewrite (Prompt 8) instead of bare retry |
+| 2026-04-23 | Leaf-confirmed nodes excluded from parent candidates when proposing next layer — prevents decomposing nodes already marked as leaves |

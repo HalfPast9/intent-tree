@@ -92,22 +92,22 @@ The stack follows the PRD growing-log model: there is no upfront stack proposal/
 
 ## Phase 2 Layer
 
-### Get existing criteria by depth
+### Get existing definition by depth
 
 ```bash
-curl -s http://localhost:3000/api/phase2/layer/0/criteria | jq
+curl -s http://localhost:3000/api/phase2/layer/0/definition | jq
 ```
 
-### Generate criteria (Prompt 3 in PRD)
+### Generate definition (Prompt 3 in PRD)
 
 ```bash
-curl -s -X POST http://localhost:3000/api/phase2/layer/0/criteria/generate | jq
+curl -s -X POST http://localhost:3000/api/phase2/layer/0/definition/generate | jq
 ```
 
-### Approve criteria
+### Approve definition
 
 ```bash
-curl -s -X POST http://localhost:3000/api/phase2/layer/0/criteria/approve \
+curl -s -X POST http://localhost:3000/api/phase2/layer/0/definition/approve \
   -H 'Content-Type: application/json' \
   -d '{"layer_name":"System","responsibility_scope":"Overall platform responsibilities","considerations":"Latency, availability","out_of_scope":"UI polish","checklist_template":"[\"Correctness\",\"SLO compliance\"]"}' | jq
 ```
@@ -204,20 +204,104 @@ curl -s -X POST http://localhost:3000/api/phase1/message -H 'Content-Type: appli
 curl -s -X POST http://localhost:3000/api/phase1/conflict-check | jq
 curl -s -X POST http://localhost:3000/api/phase1/lock | jq
 curl -s http://localhost:3000/api/phase2/stack | jq
-curl -s -X POST http://localhost:3000/api/phase2/layer/0/criteria/generate | jq
-curl -s -X POST http://localhost:3000/api/phase2/layer/0/criteria/approve -H 'Content-Type: application/json' -d '{}' | jq
+curl -s -X POST http://localhost:3000/api/phase2/layer/0/definition/generate | jq
+curl -s -X POST http://localhost:3000/api/phase2/layer/0/definition/approve -H 'Content-Type: application/json' -d '{}' | jq
 curl -s -X POST http://localhost:3000/api/phase2/layer/0/nodes/propose | jq
 curl -s -X POST http://localhost:3000/api/phase2/layer/0/nodes/approve | jq
 ```
 
-## Not Yet Implemented
+## Phase 2 Validation
 
-The API design in `docs/intent-tree.md` also lists these planned endpoints, which are not implemented in the server yet:
+### Validate a single node (Prompt 5)
 
-- `POST /api/phase2/layer/:depth/validate/node/:nodeId`
-- `POST /api/phase2/layer/:depth/validate/collective`
-- `POST /api/phase2/layer/:depth/validate/syntax`
-- `POST /api/phase2/layer/:depth/lock`
-- `POST /api/phase2/diagnose/:nodeId`
-- `POST /api/phase2/diagnose/:nodeId/confirm`
-- `POST /api/phase2/traverse/upward`
+```bash
+curl -s -X POST http://localhost:3000/api/phase2/layer/0/validate/node/L0-url-shortener | jq
+```
+
+### Collective vertical check (Prompt 6)
+
+```bash
+curl -s -X POST http://localhost:3000/api/phase2/layer/0/validate/collective | jq
+```
+
+### Syntax check (rule-based, no LLM)
+
+```bash
+curl -s -X POST http://localhost:3000/api/phase2/layer/0/validate/syntax | jq
+```
+
+### Lock layer
+
+```bash
+curl -s -X POST http://localhost:3000/api/phase2/layer/0/lock | jq
+```
+
+## Phase 2 Leaf Determination
+
+### Determine leaf nodes (LLM)
+
+```bash
+curl -s -X POST http://localhost:3000/api/phase2/layer/0/leaf/determine | jq
+```
+
+### Confirm leaf nodes (with optional overrides)
+
+```bash
+curl -s -X POST http://localhost:3000/api/phase2/layer/0/leaf/confirm \
+  -H 'Content-Type: application/json' \
+  -d '{"overrides": {"L0-url-shortener": "leaf"}}' | jq
+```
+
+Body: `{ "overrides": { nodeId: "leaf" | "decompose_further" } }`. Omit `overrides` or pass empty body to accept LLM determination as-is.
+
+## Phase 2 Exit Check and Lock
+
+### Exit check — are all non-leaf nodes decomposed?
+
+```bash
+curl -s http://localhost:3000/api/phase2/exit-check | jq
+```
+
+Returns `{ complete: boolean, decompose_further_ids: string[] }`.
+
+### Lock Phase 2
+
+```bash
+curl -s -X POST http://localhost:3000/api/phase2/lock | jq
+```
+
+Requires exit check to be complete.
+
+## Phase 2 Failure Handling
+
+### Diagnose a failed node (Prompt 7)
+
+```bash
+curl -s -X POST http://localhost:3000/api/phase2/diagnose/L0-url-shortener | jq
+```
+
+### Confirm or override diagnosis
+
+```bash
+curl -s -X POST http://localhost:3000/api/phase2/diagnose/L0-url-shortener/confirm \
+  -H 'Content-Type: application/json' \
+  -d '{}' | jq
+```
+
+Pass `{ classification, origin_nodes, suggested_action }` fields to override. Empty body confirms as-is. If `classification` is `"design"` and `origin_nodes` is non-empty, upward traversal fires automatically.
+
+### Rewrite a node (Prompt 8 — implementation error repair)
+
+```bash
+curl -s -X POST http://localhost:3000/api/phase2/diagnose/L0-url-shortener/rewrite | jq
+```
+
+No body. Requires a prior `node_validation_failed` event for the node. Rewrites `intent`, `inputs`, and `outputs` based on failed checklist items, then auto-revalidates. Returns `{ rewritten: { intent, inputs, outputs }, validation: { passed, results[] } }`.
+
+### Upward traversal
+
+```bash
+curl -s -X POST http://localhost:3000/api/phase2/traverse/upward \
+  -H 'Content-Type: application/json' \
+  -d '{"origin_nodes": ["L0-url-shortener"]}' | jq
+```

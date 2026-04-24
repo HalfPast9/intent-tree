@@ -124,6 +124,18 @@ export async function getEventsByNodeId(nodeId: string): Promise<EventRecord[]> 
   });
 }
 
+export async function getEventsByType(type: string): Promise<EventRecord[]> {
+  return withSession("READ", async (session) => {
+    const result = await session.executeRead((tx) =>
+      tx.run(
+        `MATCH (e:Event {type: $type}) RETURN e ORDER BY e.timestamp ASC`,
+        { type }
+      )
+    );
+    return result.records.map((record) => mapEvent(getNodeProps(record, "e")));
+  });
+}
+
 export async function getFullTimeline(): Promise<EventRecord[]> {
   return withSession("READ", async (session) => {
     const result = await session.executeRead((tx) =>

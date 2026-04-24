@@ -7,6 +7,7 @@ export interface LayerCriteriaDoc {
   out_of_scope: string;
   checklist_template: string;
   locked: boolean;
+  pending_leaf_determinations?: string | null;
 }
 
 export type LayerCriteriaDocCreateInput = LayerCriteriaDoc;
