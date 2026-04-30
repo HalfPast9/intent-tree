@@ -118,6 +118,12 @@ curl -s -X POST http://localhost:3000/api/phase2/layer/0/definition/approve \
 curl -s http://localhost:3000/api/phase2/layer/0/nodes | jq
 ```
 
+### Get edges by depth
+
+```bash
+curl -s http://localhost:3000/api/phase2/layer/0/edges | jq
+```
+
 ### Propose nodes (Prompt 4 in PRD)
 
 ```bash

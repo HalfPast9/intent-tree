@@ -1,0 +1,25 @@
+:root {
+  --bg: #0f1117;
+  --s1: #161b27;
+  --s2: #1c2235;
+  --bdr: #2a3147;
+  --bdr-hi: #3d4f70;
+  --tx1: #c8d0e0;
+  --tx2: #8a94ad;
+  --tx3: #4e5a75;
+  --acc: #2dd4bf;
+  --acc-d: rgba(45, 212, 191, 0.1);
+
+  --pending: #4e5a75;
+  --bg-pending: transparent;
+  --locked: #4e5a75;
+  --bg-locked: rgba(78, 90, 117, 0.08);
+  --proposed: #f59e0b;
+  --bg-proposed: rgba(245, 158, 11, 0.08);
+  --passed: #34d399;
+  --bg-passed: rgba(52, 211, 153, 0.07);
+  --failed: #f87171;
+  --bg-failed: rgba(248, 113, 113, 0.08);
+  --invalidated: #4e5a75;
+  --bg-invalidated: transparent;
+}

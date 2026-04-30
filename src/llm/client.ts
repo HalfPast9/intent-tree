@@ -121,3 +121,48 @@ export async function callLLMWithMessages<T extends Record<string, unknown>>(
     throw new LLMResponseParseError("Failed to parse LLM response as JSON.", raw);
   }
 }
+
+export async function callLLMWithMessagesStream<T extends Record<string, unknown>>(
+  messages: LLMMessage[],
+  options: { temperature?: number } = {},
+  onToken: (token: string) => void
+): Promise<T> {
+  const stream = await client.chat.completions.create({
+    model: env.AZURE_KIMI_MODEL,
+    temperature: options.temperature ?? 0.2,
+    response_format: { type: "json_object" },
+    messages,
+    stream: true
+  });
+
+  let raw = "";
+  for await (const chunk of stream) {
+    const token = chunk.choices[0]?.delta?.content ?? "";
+    if (token) {
+      raw += token;
+      onToken(token);
+    }
+  }
+
+  recordRawResponse(raw);
+
+  if (!raw) {
+    throw new LLMResponseParseError("LLM response content was empty.", raw);
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new LLMResponseParseError("LLM response must be a JSON object.", raw);
+    }
+
+    return parsed as T;
+  } catch (error) {
+    if (error instanceof LLMResponseParseError) {
+      throw error;
+    }
+
+    throw new LLMResponseParseError("Failed to parse LLM response as JSON.", raw);
+  }
+}

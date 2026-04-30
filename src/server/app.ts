@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   getAbstractionStackById,
   getAnySession,
+  getEdgesByDepth,
   getEventHistory,
   getFullTimeline,
   getLayerCriteriaDocByDepth,
@@ -16,6 +17,7 @@ import {
   getOrCreatePhase1Spec,
   lockPhase1,
   processUserMessage,
+  processUserMessageStream,
   runConflictCheck
 } from "../phase1/service.js";
 import {
@@ -40,7 +42,7 @@ import {
   validateNode
 } from "../phase2/service.js";
 
-const publicDir = path.resolve(process.cwd(), "public");
+const clientDistDir = path.resolve(process.cwd(), "client/dist");
 
 type ApiEnvelope = {
   ok: boolean;
@@ -89,7 +91,7 @@ export function createApp() {
   const app = express();
 
   app.use(express.json());
-  app.use(express.static(publicDir));
+  app.use(express.static(clientDistDir));
 
   app.get("/api/phase1/spec", async (_req, res, next) => {
     try {
@@ -125,6 +127,32 @@ export function createApp() {
       );
     } catch (error) {
       next(error);
+    }
+  });
+
+  app.post("/api/phase1/message/stream", async (req, res) => {
+    const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+
+    if (!message) {
+      res.status(400).json({ ok: false, error: "Message is required." });
+      return;
+    }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const send = (event: Record<string, unknown>) => {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    };
+
+    try {
+      await processUserMessageStream(message, send);
+    } catch (error) {
+      send({ type: "error", message: error instanceof Error ? error.message : "An error occurred." });
+    } finally {
+      res.end();
     }
   });
 
@@ -228,12 +256,23 @@ export function createApp() {
 
       const nodes = await getNodesByDepth(depth);
       const drafts = await getNodeChecklistDraftsByDepth(depth);
+      const allEdges = await getEdgesByDepth(depth);
 
       const view = nodes.map((node) => ({
         id: node.id,
         intent: node.intent,
         parents: node.parents,
-        edges: [],
+        inputs: node.inputs,
+        outputs: node.outputs,
+        leaf: node.leaf ?? null,
+        edges: allEdges
+          .filter((e) => e.source === node.id || e.target === node.id)
+          .map((e) => ({
+            id: e.id,
+            target: e.source === node.id ? e.target : e.source,
+            interface: e.interface,
+            direction: e.direction
+          })),
         checklist: (() => {
           const raw = drafts.find((d) => d.node_id === node.id)?.checklist ?? "[]";
 
@@ -248,6 +287,22 @@ export function createApp() {
       }));
 
       res.json(ok({ nodes: view }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/phase2/layer/:depth/edges", async (req, res, next) => {
+    try {
+      const depth = parseDepth(req.params.depth);
+
+      if (depth === null) {
+        res.status(400).json({ ok: false, error: "Depth must be a non-negative integer." });
+        return;
+      }
+
+      const edges = await getEdgesByDepth(depth);
+      res.json(ok({ edges }));
     } catch (error) {
       next(error);
     }
@@ -647,7 +702,7 @@ export function createApp() {
   });
 
   app.get("*", (_req, res) => {
-    res.sendFile(path.join(publicDir, "index.html"));
+    res.sendFile(path.join(clientDistDir, "index.html"));
   });
 
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

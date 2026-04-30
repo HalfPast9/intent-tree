@@ -692,7 +692,8 @@ Practical request/response examples are documented in `docs/api.md`.
 | `GET` | `/api/phase2/layer/:depth/definition` | Layer definition for given depth |
 | `POST` | `/api/phase2/layer/:depth/definition/generate` | Run Prompt 3, return layer definition + raw LLM output |
 | `POST` | `/api/phase2/layer/:depth/definition/approve` | Approve or edit+approve layer definition |
-| `GET` | `/api/phase2/layer/:depth/nodes` | All nodes at given depth |
+| `GET` | `/api/phase2/layer/:depth/nodes` | All nodes at given depth (includes inputs, outputs, leaf, populated edges) |
+| `GET` | `/api/phase2/layer/:depth/edges` | All edges at given depth |
 | `POST` | `/api/phase2/layer/:depth/nodes/propose` | Run Prompt 4, return proposed nodes + checklists + raw LLM output |
 | `POST` | `/api/phase2/layer/:depth/nodes/approve` | User confirms proposed nodes and checklists |
 | `POST` | `/api/phase2/layer/:depth/nodes/repropose/parent/:parentId` | Re-run Prompt 4 for a single parent (accumulates into pending re-proposal batch) |

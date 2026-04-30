@@ -1,0 +1,6 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+export function Header({ phase, label, llmBusy, states = [] }) {
+    const proposed = states.filter((s) => s === "proposed").length;
+    const failed = states.filter((s) => s === "failed").length;
+    return (_jsxs("header", { className: "hdr", children: [_jsxs("div", { style: { display: "flex", alignItems: "center", gap: 10 }, children: [_jsx("span", { style: { width: 8, height: 8, borderRadius: 2, background: "var(--acc)", display: "inline-block" } }), _jsx("span", { className: "mono", style: { color: "var(--acc)", fontSize: 12 }, children: "intent tree" }), _jsxs("span", { className: "mono", style: { color: "var(--tx2)", fontSize: 11 }, children: [phase, " \u00B7 ", label] })] }), _jsxs("div", { style: { display: "flex", alignItems: "center", gap: 8 }, children: [states.length > 0 && _jsxs("span", { className: "badge", children: ["nodes ", states.length] }), proposed > 0 && _jsxs("span", { className: "badge", style: { borderColor: "var(--proposed)", color: "var(--proposed)" }, children: ["proposed ", proposed] }), failed > 0 && _jsxs("span", { className: "badge", style: { borderColor: "var(--failed)", color: "var(--failed)" }, children: ["failed ", failed] }), llmBusy && _jsx("span", { className: "pulse" })] })] }));
+}

@@ -122,16 +122,34 @@ export function buildPrompt1SystemPrompt(): string {
     "- spec_update may update one or multiple schema fields in one turn.",
     "- If no field changed this turn, return spec_update as {}.",
     "- Only include keys from the schema field list.",
-    "- Values in spec_update must be strings."
+    "- Values in spec_update must be strings.",
+    "",
+    "Abstraction level rules (critical):",
+    "- The spec captures WHAT the system must do and WHY the constraints exist. It must NOT contain HOW.",
+    "- HOW means: specific timeout values, retry counts, buffer sizes, algorithm choices, protocol details, implementation mechanisms. These belong in Phase 2, not here.",
+    "- If the user provides implementation detail, abstract it up to a system-level statement. Examples:",
+    "  '180ms DB timeout' → 'storage operations must complete within the overall request latency budget'",
+    "  '3 retries with exponential backoff' → omit entirely, this is Phase 2",
+    "  'use Redis for caching' → 'read path must support low-latency caching'",
+    "- Each field should read at the level a CTO would sign off on, not an engineer implementing it.",
+    "- When in doubt, keep it shorter and more directional rather than longer and more specific."
   ].join("\n");
 }
 
 export function buildPrompt2(spec: ProblemSpec): string {
   return [
     "You are Prompt 2 (Conflict Check) for Intent Tree.",
-    "Your task is to detect tensions/conflicts in the completed Phase 1 spec.",
-    "Prioritize conflicts between hard_constraints, optimization_targets, and nfrs.",
-    "Also verify problem_statement and success_criteria are aligned and achievable under constraints.",
+    "Your task is to identify structural conflicts in the Phase 1 spec that would prevent architecture from starting.",
+    "",
+    "Scope gate (read carefully before evaluating):",
+    "- Only flag a conflict if two reasonable architects, reading this spec, would make FUNDAMENTALLY INCOMPATIBLE structural decisions.",
+    "  Example of a real conflict: 'never lose data' + 'avoid replication' — these force contradictory storage architectures.",
+    "  Example of NOT a conflict: 'low latency' + 'cost efficiency' — these are tradeoffs, not contradictions. Every system balances them.",
+    "- Do NOT flag tensions that are resolvable during architecture (Phase 2 design tradeoffs).",
+    "- Do NOT flag tensions introduced by qualifying or clarifying language added to resolve a previous conflict.",
+    "- Do NOT flag tensions between specific numbers, thresholds, or implementation-level details.",
+    "- A well-scoped Phase 1 spec should have 0–3 genuine structural conflicts. If you find more than 3, the spec is over-specified and the extra tensions are sub-architectural — omit them and return the 1–3 most fundamental ones only.",
+    "- Ask yourself: would leaving this tension unresolved prevent an architect from choosing a system shape? If no, it is not a Phase 1 conflict.",
     "",
     "Complete spec:",
     JSON.stringify(

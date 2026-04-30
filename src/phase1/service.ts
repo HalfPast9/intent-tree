@@ -6,7 +6,7 @@ import {
   getProblemSpecById,
   updateProblemSpec
 } from "../db/index.js";
-import { callLLM, callLLMWithMessages, LLMMessage } from "../llm/client.js";
+import { callLLM, callLLMWithMessages, callLLMWithMessagesStream, LLMMessage } from "../llm/client.js";
 import { EventActor } from "../models/event.js";
 import { ProblemSpec } from "../models/problemSpec.js";
 import { transitionSessionToPhase2 } from "../phase2/service.js";
@@ -276,6 +276,58 @@ export async function processUserMessage(userMessage: string): Promise<{
     clean: result.clean,
     conflicts: result.conflicts
   };
+}
+
+export type Phase1StreamEvent =
+  | { type: "token"; token: string }
+  | { type: "status"; text: string }
+  | { type: "done"; message: string; spec: ProblemSpec; clean: boolean; conflicts: Prompt2Conflict[] }
+  | { type: "error"; message: string };
+
+export async function processUserMessageStream(
+  userMessage: string,
+  send: (event: Phase1StreamEvent) => void
+): Promise<void> {
+  const currentSpec = await getOrCreatePhase1Spec();
+
+  if (currentSpec.locked) {
+    send({ type: "error", message: "Phase 1 is locked and read-only." });
+    return;
+  }
+
+  const prompt = buildPrompt1(currentSpec, userMessage, latestConflicts);
+  const messages: LLMMessage[] = [
+    { role: "system", content: buildPrompt1SystemPrompt() },
+    ...chatHistory,
+    { role: "user", content: prompt }
+  ];
+
+  const raw = await callLLMWithMessagesStream<Record<string, unknown>>(
+    messages,
+    { temperature: 0.2 },
+    (token) => send({ type: "token", token })
+  );
+  const llmResponse = validatePrompt1Response(raw);
+  const updatedSpec = await applySpecUpdate(currentSpec, llmResponse.spec_update, "llm");
+
+  chatHistory.push({ role: "user", content: userMessage });
+  chatHistory.push({ role: "assistant", content: llmResponse.message });
+
+  if (!isPhase1SpecComplete(updatedSpec)) {
+    send({ type: "done", message: llmResponse.message, spec: updatedSpec, clean: false, conflicts: [] });
+    return;
+  }
+
+  send({ type: "status", text: "checking for conflicts..." });
+  const { result } = await runConflictCheck();
+
+  send({
+    type: "done",
+    message: llmResponse.message,
+    spec: await getOrCreatePhase1Spec(),
+    clean: result.clean,
+    conflicts: result.conflicts
+  });
 }
 
 export async function lockPhase1(): Promise<ProblemSpec> {

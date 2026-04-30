@@ -1,0 +1,4 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+export function Sidebar({ mode, setMode, children }) {
+    return (_jsxs("aside", { className: "panel", style: { borderRadius: 0, borderLeft: "none", borderTop: "none", borderBottom: "none", display: "flex", flexDirection: "column" }, children: [_jsxs("div", { style: { display: "flex", gap: 4, padding: 8, borderBottom: "1px solid var(--bdr)" }, children: [_jsx("button", { className: `btn ${mode === "tree" ? "btn-pri" : "btn-ghost"}`, onClick: () => setMode("tree"), children: "tree" }), _jsx("button", { className: `btn ${mode === "events" ? "btn-pri" : "btn-ghost"}`, onClick: () => setMode("events"), children: "events" })] }), _jsx("div", { style: { minHeight: 0, overflow: "auto", padding: 8 }, children: children })] }));
+}
