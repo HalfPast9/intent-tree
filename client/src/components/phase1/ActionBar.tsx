@@ -32,6 +32,7 @@ export function ActionBar({ allFilled, clean, onConflict }: ActionBarProps) {
     try {
       await lockPhase1.mutateAsync(undefined);
       await queryClient.refetchQueries({ queryKey: ["session"] });
+      pushToast("Phase 1 locked — entering Phase 2", "info");
       navigate("/phase2");
     } catch (error) {
       pushToast(error instanceof Error ? error.message : "Phase 1 lock failed", "error");

@@ -341,12 +341,6 @@ export async function lockPhase1(): Promise<ProblemSpec> {
     throw new Error("Cannot lock Phase 1 before all required fields are populated.");
   }
 
-  const { result } = await runConflictCheck();
-
-  if (!result.clean) {
-    throw new Error("Cannot lock Phase 1 while conflicts are unresolved.");
-  }
-
   const lockedSpec = await updateProblemSpec(PHASE1_SPEC_ID, { locked: true });
 
   if (!lockedSpec) {
