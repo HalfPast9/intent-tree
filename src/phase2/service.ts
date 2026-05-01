@@ -832,6 +832,21 @@ export async function proposeLayerNodes(depth: number): Promise<Phase2NodeView[]
     }
   }
 
+  const parentEdgesByParent = new Map<string, Array<{ peer: string; interface: string; direction: string }>>();
+  if (depth > 0) {
+    const parentDepthEdges = await getEdgesByDepth(depth - 1);
+    for (const edge of parentDepthEdges) {
+      for (const [nodeId, peerId] of [[edge.source, edge.target], [edge.target, edge.source]]) {
+        if (!parentEdgesByParent.has(nodeId)) parentEdgesByParent.set(nodeId, []);
+        parentEdgesByParent.get(nodeId)!.push({
+          peer: peerId,
+          interface: edge.interface,
+          direction: edge.direction
+        });
+      }
+    }
+  }
+
   const allProposedNodes: Prompt4Response["nodes"] = [];
 
   for (const parent of parents) {
@@ -857,7 +872,8 @@ export async function proposeLayerNodes(depth: number): Promise<Phase2NodeView[]
           depth,
           parent,
           layerCriteriaDoc,
-          existingNodesAtDepth
+          existingNodesAtDepth,
+          parentEdges: parentEdgesByParent.get(parent.id) ?? []
         })
       )
     );
@@ -1155,6 +1171,18 @@ export async function reproposeParent(
     parents: n.parents
   }));
 
+  let parentEdges: Array<{ peer: string; interface: string; direction: string }> = [];
+  if (depth > 0 && parentId !== "root") {
+    const parentDepthEdges = await getEdgesByDepth(depth - 1);
+    parentEdges = parentDepthEdges
+      .filter((e) => e.source === parentId || e.target === parentId)
+      .map((e) => ({
+        peer: e.source === parentId ? e.target : e.source,
+        interface: e.interface,
+        direction: e.direction
+      }));
+  }
+
   const raw = await callLLMWithMessages<Record<string, unknown>>(
     buildSimpleMessages(
       prompt4System({
@@ -1169,7 +1197,8 @@ export async function reproposeParent(
         depth,
         parent,
         layerCriteriaDoc,
-        existingNodesAtDepth
+        existingNodesAtDepth,
+        parentEdges
       })
     )
   );

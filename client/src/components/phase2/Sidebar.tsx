@@ -13,7 +13,7 @@ export function Sidebar({ mode, setMode, children }: SidebarProps) {
         <button className={`btn ${mode === "tree" ? "btn-pri" : "btn-ghost"}`} style={{ minWidth: 0, flex: 1 }} onClick={() => setMode("tree")}>tree</button>
         <button className={`btn ${mode === "events" ? "btn-pri" : "btn-ghost"}`} style={{ minWidth: 0, flex: 1 }} onClick={() => setMode("events")}>events</button>
       </div>
-      <div style={{ minHeight: 0, overflow: "auto", padding: 8 }}>{children}</div>
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 8 }}>{children}</div>
     </aside>
   );
 }

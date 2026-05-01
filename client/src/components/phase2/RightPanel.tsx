@@ -45,7 +45,7 @@ export function RightPanel(props: RightPanelProps) {
         {tabButton("node", "Node")}
         {tabButton("spec", "Spec")}
       </div>
-      <div style={{ minHeight: 0, overflow: "auto", padding: 10 }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", padding: 10 }}>
         {props.activeTab === "step" && (
           <StepTab
             depth={props.depth}

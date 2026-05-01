@@ -169,8 +169,14 @@ export function prompt4System(args: {
     "- Keep the same id as the claimed node",
     "If creating a new node, set claimed_from and proposed_edits to null.",
     "",
+    "CROSS-PARENT EDGES: You will be shown the current parent's edges to peer parents at the same depth.",
+    "These represent connections that MUST be preserved at the child layer.",
+    "For each parent-level edge, at least one of your proposed child nodes must have an edge to a child of the connected peer parent.",
+    "Target existing nodes from prior decompositions shown in the existing nodes list.",
+    "The child-level edge should refine the parent-level interface — be more specific about what data flows between the children.",
+    "",
     "Return only JSON with shape:",
-    '{ "nodes": [{ "id": "L<depth>-<slug>", "intent": "...", "parents": ["<parent_id>"], "inputs": "...", "outputs": "...", "edges": [{ "target": "<sibling_id>", "interface": "...", "direction": "directed"|"bidirectional" }], "claimed_from": null, "proposed_edits": null, "checklist": [{ "item": "...", "context": "..." }] }] }'
+    '{ "nodes": [{ "id": "L<depth>-<slug>", "intent": "...", "parents": ["<parent_id>"], "inputs": "...", "outputs": "...", "edges": [{ "target": "<sibling_or_cross_parent_node_id>", "interface": "...", "direction": "directed"|"bidirectional" }], "claimed_from": null, "proposed_edits": null, "checklist": [{ "item": "...", "context": "..." }] }] }'
   ].join("\n");
 }
 
@@ -183,8 +189,9 @@ export function prompt4User(args: {
     | { id: "root"; intent: string };
   layerCriteriaDoc: Prompt3Response;
   existingNodesAtDepth: Array<{ id: string; intent: string; inputs: string; outputs: string; parents: string[] }>;
+  parentEdges?: Array<{ peer: string; interface: string; direction: string }>;
 }): string {
-  return [
+  const parts = [
     "Phase 1 spec:",
     JSON.stringify(phase1View(args.spec), null, 2),
     "",
@@ -202,7 +209,17 @@ export function prompt4User(args: {
     args.existingNodesAtDepth.length
       ? JSON.stringify(args.existingNodesAtDepth, null, 2)
       : "None yet."
-  ].join("\n");
+  ];
+
+  if (args.parentEdges && args.parentEdges.length > 0) {
+    parts.push(
+      "",
+      "PARENT EDGES TO PEER PARENTS (your child nodes must preserve these connections by creating edges to children of the peer):",
+      JSON.stringify(args.parentEdges, null, 2)
+    );
+  }
+
+  return parts.join("\n");
 }
 
 export function prompt5System(): string {
