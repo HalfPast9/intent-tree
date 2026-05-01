@@ -56,6 +56,9 @@ import {
   Prompt5Response,
   Prompt6Response,
   Prompt7Response,
+  Prompt10Response,
+  prompt10System,
+  prompt10User,
   promptRewriteSystem,
   promptRewriteUser,
   StackLayerInput
@@ -384,6 +387,50 @@ function validatePrompt7(raw: Record<string, unknown>): Prompt7Response {
     origin_nodes,
     suggested_action
   };
+}
+
+function validatePrompt10(raw: Record<string, unknown>): Prompt10Response {
+  const passed = typeof raw.passed === "boolean" ? raw.passed : false;
+
+  const edgeResultsRaw = Array.isArray(raw.edge_results) ? raw.edge_results : [];
+  const edge_results = edgeResultsRaw
+    .map((entry) => {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+      const e = entry as Record<string, unknown>;
+      const source = typeof e.source === "string" ? e.source : "";
+      const target = typeof e.target === "string" ? e.target : "";
+      const edgePassed = typeof e.passed === "boolean" ? e.passed : false;
+      const issues = Array.isArray(e.issues)
+        ? (e.issues as Array<Record<string, unknown>>)
+            .map((issue) => {
+              const type = typeof issue.type === "string" ? issue.type : "";
+              const description = typeof issue.description === "string" ? issue.description : "";
+              if (!type || !description) return null;
+              return { type: type as "interface_incompatible" | "direction_incorrect" | "interface_vague", description };
+            })
+            .filter((i): i is NonNullable<typeof i> => i !== null)
+        : [];
+      if (!source || !target) return null;
+      return { source, target, passed: edgePassed, issues };
+    })
+    .filter((r): r is Prompt10Response["edge_results"][number] => r !== null);
+
+  const missingRaw = Array.isArray(raw.missing_edges) ? raw.missing_edges : [];
+  const missing_edges = missingRaw
+    .map((entry) => {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return null;
+      const e = entry as Record<string, unknown>;
+      const source = typeof e.source === "string" ? e.source : "";
+      const target = typeof e.target === "string" ? e.target : "";
+      const rationale = typeof e.rationale === "string" ? e.rationale : "";
+      const suggested_interface = typeof e.suggested_interface === "string" ? e.suggested_interface : "";
+      const suggested_direction: "directed" | "bidirectional" = e.suggested_direction === "bidirectional" ? "bidirectional" : "directed";
+      if (!source || !target) return null;
+      return { source, target, rationale, suggested_interface, suggested_direction };
+    })
+    .filter((r): r is Prompt10Response["missing_edges"][number] => r !== null);
+
+  return { passed, edge_results, missing_edges };
 }
 
 function validateLeafDeterminationResponse(raw: Record<string, unknown>): LeafDeterminationResponse {
@@ -1422,11 +1469,73 @@ export async function runCollectiveVerticalCheck(depth: number): Promise<Prompt6
   return result;
 }
 
+export async function runEdgeValidation(depth: number): Promise<Prompt10Response> {
+  const spec = await requirePhase1Spec();
+  const nodes = await getNodesByDepth(depth);
+
+  if (!nodes.length) {
+    throw new Error(`No nodes found at depth ${depth}.`);
+  }
+
+  const edges = await getEdgesByDepth(depth);
+  const layerDefinition = await getLayerCriteriaDocByDepth(depth);
+  if (!layerDefinition) {
+    throw new Error(`No layer definition found at depth ${depth}.`);
+  }
+
+  const layerCriteriaDoc: Prompt3Response = {
+    layer_name: layerDefinition.layer_name,
+    responsibility_scope: layerDefinition.responsibility_scope,
+    considerations: layerDefinition.considerations,
+    out_of_scope: layerDefinition.out_of_scope,
+    checklist_template: JSON.parse(layerDefinition.checklist_template)
+  };
+
+  await emitEvent("edge_validation_attempted", "llm", { depth }, []);
+
+  const raw = await callLLMWithMessages<Record<string, unknown>>(
+    buildSimpleMessages(
+      prompt10System(),
+      prompt10User({
+        spec,
+        depth,
+        nodes: nodes.map((n) => ({ id: n.id, intent: n.intent, inputs: n.inputs, outputs: n.outputs })),
+        edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, interface: e.interface, direction: e.direction })),
+        layerCriteriaDoc
+      })
+    )
+  );
+
+  const result = validatePrompt10(raw);
+
+  if (result.passed) {
+    await emitEvent("edge_validation_passed", "llm", { depth }, []);
+  } else {
+    await emitEvent("edge_validation_failed", "llm", { depth, edge_results: result.edge_results, missing_edges: result.missing_edges }, []);
+  }
+
+  return result;
+}
+
 export async function lockLayer(depth: number): Promise<{ locked: true; node_count: number }> {
   const nodes = await getNodesByDepth(depth);
 
   if (!nodes.length) {
     throw new Error(`No nodes found at depth ${depth}.`);
+  }
+
+  const edgeEvents = await getEventsByType("edge_validation_passed");
+  const edgePassed = edgeEvents.some((e) => {
+    try {
+      return (JSON.parse(e.payload) as Record<string, unknown>).depth === depth;
+    } catch {
+      return false;
+    }
+  });
+  if (!edgePassed) {
+    throw new Error(
+      `Cannot lock layer ${depth}: edge validation has not passed. Run runEdgeValidation first.`
+    );
   }
 
   const collectiveEvents = await getEventsByType("collective_vertical_passed");

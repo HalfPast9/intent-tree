@@ -1,5 +1,5 @@
 # Intent Tree — Technical Specification
-> V1 build target. Last updated: 2026-04-24.
+> V1 build target. Last updated: 2026-05-01.
 
 ---
 
@@ -91,6 +91,7 @@ A node is a **subsystem** — a unit of solution responsibility. Not a task, not
 | `edges` | IDs of edges connecting this node to neighbours at the same depth |
 | `inputs` | What this node receives — vague at upper layers, typed signature at leaf level |
 | `outputs` | What this node produces — vague at upper layers, typed signature at leaf level |
+| `leaf` | `true` (leaf node), `false` (decompose further), or `null` (undetermined) — set by leaf determination step |
 
 **Progressive type maturity:** At upper layers, `inputs` and `outputs` are natural language descriptions ("receives user credentials"). At the leaf layer, they are typed function signatures ("receives `TokenPayload { userId: string, exp: number }`"). The schema is the same field — its precision increases as decomposition deepens.
 
@@ -232,7 +233,9 @@ START OF LAYER
 │   │     □ All leaf nodes have fully typed inputs and outputs
 │   │
 │   ├─ IF PASS (all nodes pass individual checklists):
-│   │     → Trigger collective vertical check
+│   │     → Trigger edge validation (Prompt 10)
+│   │     → IF FAIL: specific edge issues/missing edges returned → retry from node iteration
+│   │     → IF PASS: trigger collective vertical check
 │   │     → IF PASS: proceed to syntax checker
 │   │     → IF FAIL: specific gaps/overlaps returned → retry from node iteration
 │   │
@@ -306,7 +309,7 @@ Each call type receives a different payload — purpose-built, not a generic dum
 
 ### 7.3 Prompt Catalogue
 
-Eight distinct prompts. Each defined by what it receives, what it returns, and format.
+Ten distinct prompts. Each defined by what it receives, what it returns, and format.
 
 ---
 
@@ -547,6 +550,79 @@ Rules: only change what failed; preserve what already passed; stay within the la
 
 ---
 
+**Prompt 9 — Leaf determination** (post-lock classification)
+
+Fires after a layer is locked. Classifies each locked node as either a leaf (single indivisible operation) or needing further decomposition.
+
+Receives:
+- Full Phase 1 spec
+- Current depth
+- All locked nodes at this depth (id, intent, inputs, outputs)
+
+Returns:
+```json
+{
+  "nodes": [
+    { "node_id": "...", "determination": "leaf"|"decompose_further", "reasoning": "..." }
+  ]
+}
+```
+
+Rules: a node is `leaf` if it is a single block of logic with no internal sub-components that interact. A node is `decompose_further` if it contains multiple parts with relationships between them. Leaf nodes should eventually have fully typed inputs/outputs — flag in reasoning if a leaf node's I/O is still vague.
+
+---
+
+**Prompt 10 — Edge validation** (horizontal wiring check, collective)
+
+Fires after all nodes pass individual validation (Prompt 5) and before the collective vertical check (Prompt 6). Validates that existing edges are well-formed and identifies missing edges.
+
+Receives:
+- Full Phase 1 spec
+- All nodes at this depth (id, intent, inputs, outputs)
+- All edges at this depth (source, target, interface, direction)
+- Layer definition
+
+Returns:
+```json
+{
+  "passed": true,
+  "edge_results": [
+    {
+      "source": "L1-svc-a",
+      "target": "L1-svc-b",
+      "passed": true,
+      "issues": []
+    },
+    {
+      "source": "L1-svc-b",
+      "target": "L1-svc-c",
+      "passed": false,
+      "issues": [
+        {
+          "type": "interface_incompatible",
+          "description": "source outputs JSON but target expects protobuf"
+        }
+      ]
+    }
+  ],
+  "missing_edges": [
+    {
+      "source": "L1-svc-a",
+      "target": "L1-svc-c",
+      "rationale": "svc-a produces events that svc-c must consume",
+      "suggested_interface": "EventStream<OrderEvent>",
+      "suggested_direction": "directed"
+    }
+  ]
+}
+```
+
+Issue types: `interface_incompatible` (source/target I/O mismatch), `direction_incorrect` (edge direction doesn't match data flow), `interface_vague` (interface description too ambiguous for this abstraction level).
+
+`passed` is `true` only when all existing edges pass and no missing edges are identified.
+
+---
+
 ## 8. Tech Stack
 
 | Concern | Decision | Rationale |
@@ -585,7 +661,7 @@ Every action in the system is stored as an immutable event node in Neo4j. Curren
 - Full system timeline: `MATCH (e:Event) RETURN e ORDER BY e.timestamp`
 - All validation failures: `MATCH (e:Event {type: 'node_validation_failed'}) RETURN e`
 
-**Event type catalogue (~36 types):**
+**Event type catalogue (~39 types):**
 
 *Phase 1*
 | Event | Actor | Description |
@@ -602,7 +678,6 @@ Every action in the system is stored as an immutable event node in Neo4j. Curren
 | `layer_defined` | llm | Layer definition created (name, scope, considerations, checklist template) |
 | `layer_definition_approved` | human | User approved layer definition |
 | `layer_definition_edited` | human | User edited layer definition |
-| `layer_definition_updated` | llm | LLM updated layer definition mid-loop — triggers re-approval |
 | `layer_locked` | llm | All nodes in layer passed — layer is done |
 | `phase2_locked` | human | All layers locked, Phase 2 signed off |
 
@@ -614,8 +689,6 @@ Every action in the system is stored as an immutable event node in Neo4j. Curren
 | `node_claim_rejected` | llm | Shared node claim rejected — edits would break original parent |
 | `node_checklist_generated` | llm | Checklist created for node from layer template |
 | `node_checklist_approved` | human | User approved node checklist |
-| `node_checklist_edited` | human | User edited node checklist |
-| `node_checklist_updated` | llm | Checklist updated after layer definition change — triggers re-approval |
 | `node_validation_attempted` | llm | Validation call made against checklist |
 | `node_validation_passed` | llm | Node passed all checklist items |
 | `node_validation_failed` | llm | Node failed one or more checklist items |
@@ -630,6 +703,13 @@ Every action in the system is stored as an immutable event node in Neo4j. Curren
 |-------|-------|-------------|
 | `edge_proposed` | llm | Edge created during decomposition |
 | `edge_invalidated` | llm \| human | Edge removed or invalidated |
+
+*Edge validation*
+| Event | Actor | Description |
+|-------|-------|-------------|
+| `edge_validation_attempted` | llm | Edge validation check ran |
+| `edge_validation_passed` | llm | All edges valid, no missing edges |
+| `edge_validation_failed` | llm | Edge issues or missing edges found — payload includes details |
 
 *Collective vertical + syntax*
 | Event | Actor | Description |
@@ -705,14 +785,16 @@ Practical request/response examples are documented in `docs/api.md`.
 | Method | Route | Description |
 |--------|-------|-------------|
 | `POST` | `/api/phase2/layer/:depth/validate/node/:nodeId` | Run Prompt 5 on a single node, return checklist results + raw LLM output |
+| `POST` | `/api/phase2/layer/:depth/validate/edges` | Run Prompt 10 edge validation, return edge results + missing edges + raw LLM output |
 | `POST` | `/api/phase2/layer/:depth/validate/collective` | Run Prompt 6 collective vertical check, return coverage + overlap results + raw LLM output |
 | `POST` | `/api/phase2/layer/:depth/validate/syntax` | Run syntax checker (rule-based), return structural errors |
-| `POST` | `/api/phase2/layer/:depth/lock` | Lock layer — three hard gates must all pass first (see below) |
+| `POST` | `/api/phase2/layer/:depth/lock` | Lock layer — four hard gates must all pass first (see below) |
 
-**Layer lock gates (all three required):**
-1. A `collective_vertical_passed` event exists for this depth — P6 must have passed, not just run
-2. A `syntax_check_passed` event exists for this depth — syntax check must have passed
-3. Every node at this depth has `node_validation_passed` as its most recent validation event — no node may have an outstanding failure
+**Layer lock gates (all four required):**
+1. An `edge_validation_passed` event exists for this depth — P10 must have passed, not just run
+2. A `collective_vertical_passed` event exists for this depth — P6 must have passed, not just run
+3. A `syntax_check_passed` event exists for this depth — syntax check must have passed
+4. Every node at this depth has `node_validation_passed` as its most recent validation event — no node may have an outstanding failure
 
 ### 9.5 Phase 2 — Failure handling endpoints
 
@@ -802,7 +884,7 @@ These are the only remaining unresolved items as of last update:
 | 11.5 | Graph library choice (graphology vs custom) | Section 8 |
 | 11.6 | LLM SDK (direct Azure REST vs OpenAI-compatible) | Section 8 |
 
-~~11.2 resolved:~~ All 8 prompts are implemented and refined — structure and wording both complete.
+~~11.2 resolved:~~ All 9 prompts are implemented and refined — structure and wording both complete.
 
 Items 11.1, 11.3 are best resolved once the full system is in active use. Items 11.5–11.6 are minor and can be decided at first implementation session.
 
@@ -876,4 +958,5 @@ Items 11.1, 11.3 are best resolved once the full system is in active use. Items 
 | 2026-04-24 | Pending leaf determinations persisted to layer definition record in DB — survive server restarts until confirmed |
 | 2026-04-24 | Re-proposal per parent: `POST /api/phase2/layer/:depth/nodes/repropose/parent/:parentId` accumulates proposals across multiple calls; `POST .../repropose/approve` commits all at once — enables targeted gap-filling without re-running the full layer |
 | 2026-04-24 | Manual node edit endpoint added: `PATCH /api/phase2/layer/:depth/node/:nodeId` — emits `human_override` event, intended as an escape hatch not a routine workflow |
-| 2026-04-24 | Open question 11.2 resolved — all 8 prompts implemented and refined |
+| 2026-04-24 | Open question 11.2 resolved — all 10 prompts implemented and refined |
+| 2026-05-01 | Prompt 10 (Edge Validation) added — horizontal wiring check between individual node validation and collective vertical check. Validates existing edges for interface compatibility and direction correctness, identifies missing edges. Fourth lock gate added (`edge_validation_passed`). Prompt count: 10 |

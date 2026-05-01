@@ -37,6 +37,7 @@ import {
   approveReproposeParent,
   rewriteNode,
   runCollectiveVerticalCheck,
+  runEdgeValidation,
   runLayerSyntaxCheck,
   traverseUpward,
   validateNode
@@ -418,6 +419,23 @@ export function createApp() {
 
       const result = await runLayerSyntaxCheck(depth);
       res.json(ok({ passed: result.passed, errors: result.errors }));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/phase2/layer/:depth/validate/edges", async (req, res, next) => {
+    try {
+      const depth = parseDepth(req.params.depth);
+      if (depth === null) {
+        res.status(400).json({ ok: false, error: "Depth must be a non-negative integer." });
+        return;
+      }
+
+      const rawStart = getLLMRawLogLength();
+      const result = await runEdgeValidation(depth);
+      const llmRaw = getLLMRawSince(rawStart)[0] ?? null;
+      res.json(ok({ passed: result.passed, edge_results: result.edge_results, missing_edges: result.missing_edges }, llmRaw));
     } catch (error) {
       next(error);
     }

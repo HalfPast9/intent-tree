@@ -65,6 +65,16 @@ Sample success payload (`data`):
 }
 ```
 
+### Send message — streaming (Prompt 1, SSE)
+
+```bash
+curl -N -X POST http://localhost:3000/api/phase1/message/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"We need a URL shortener."}'
+```
+
+Same as `/api/phase1/message` but returns a Server-Sent Events stream. Each event is a `data:` line with a JSON token chunk. The final chunk contains the complete response.
+
 ### Run conflict check (Prompt 2)
 
 ```bash
@@ -214,6 +224,8 @@ curl -s -X POST http://localhost:3000/api/phase2/layer/0/definition/generate | j
 curl -s -X POST http://localhost:3000/api/phase2/layer/0/definition/approve -H 'Content-Type: application/json' -d '{}' | jq
 curl -s -X POST http://localhost:3000/api/phase2/layer/0/nodes/propose | jq
 curl -s -X POST http://localhost:3000/api/phase2/layer/0/nodes/approve | jq
+# (validate individual nodes, then...)
+curl -s -X POST http://localhost:3000/api/phase2/layer/0/validate/edges | jq
 ```
 
 ## Phase 2 Validation
@@ -223,6 +235,14 @@ curl -s -X POST http://localhost:3000/api/phase2/layer/0/nodes/approve | jq
 ```bash
 curl -s -X POST http://localhost:3000/api/phase2/layer/0/validate/node/L0-url-shortener | jq
 ```
+
+### Edge validation (Prompt 10)
+
+```bash
+curl -s -X POST http://localhost:3000/api/phase2/layer/0/validate/edges | jq
+```
+
+Returns `{ passed: boolean, edge_results: [{ source, target, passed, issues }], missing_edges: [{ source, target, rationale, suggested_interface, suggested_direction }] }`.
 
 ### Collective vertical check (Prompt 6)
 

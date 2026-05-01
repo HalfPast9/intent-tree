@@ -79,6 +79,30 @@ export interface Prompt7Response {
   suggested_action: string;
 }
 
+export interface Prompt10EdgeResult {
+  source: string;
+  target: string;
+  passed: boolean;
+  issues: Array<{
+    type: "interface_incompatible" | "direction_incorrect" | "interface_vague";
+    description: string;
+  }>;
+}
+
+export interface Prompt10MissingEdge {
+  source: string;
+  target: string;
+  rationale: string;
+  suggested_interface: string;
+  suggested_direction: "directed" | "bidirectional";
+}
+
+export interface Prompt10Response {
+  passed: boolean;
+  edge_results: Prompt10EdgeResult[];
+  missing_edges: Prompt10MissingEdge[];
+}
+
 export interface LeafDetermination {
   node_id: string;
   determination: "leaf" | "decompose_further";
@@ -356,6 +380,52 @@ export function prompt7User(args: {
     "",
     "Stack:",
     JSON.stringify(args.stack, null, 2)
+  ].join("\n");
+}
+
+export function prompt10System(): string {
+  return [
+    "You are Prompt 10 (Edge Validation — Horizontal Wiring Check) for Intent Tree.",
+    "You validate whether the edges between sibling nodes at the same depth form a coherent wiring diagram.",
+    "",
+    "For EACH existing edge, check:",
+    "1. Interface compatibility — does the edge's interface description align with the source node's outputs and the target node's inputs?",
+    "2. Direction correctness — does the direction (directed vs bidirectional) match the actual data flow implied by the interface?",
+    "3. Interface clarity — is the interface description specific enough to be meaningful at this abstraction layer?",
+    "",
+    "Then check for MISSING edges:",
+    "- If a node's inputs reference data that must come from another sibling, but no edge exists, report it.",
+    "- If a node's outputs feed into another sibling's inputs, but no edge exists, report it.",
+    "- Only report truly missing connections — not every pair of nodes needs an edge.",
+    "",
+    "The layer passes only if ALL existing edges pass AND there are no missing edges.",
+    "",
+    "Return only JSON with shape:",
+    '{ "passed": true|false, "edge_results": [{ "source": "...", "target": "...", "passed": true|false, "issues": [{ "type": "interface_incompatible"|"direction_incorrect"|"interface_vague", "description": "..." }] }], "missing_edges": [{ "source": "...", "target": "...", "rationale": "...", "suggested_interface": "...", "suggested_direction": "directed"|"bidirectional" }] }'
+  ].join("\n");
+}
+
+export function prompt10User(args: {
+  spec: ProblemSpec;
+  depth: number;
+  nodes: Array<{ id: string; intent: string; inputs: string; outputs: string }>;
+  edges: Array<{ id: string; source: string; target: string; interface: string; direction: "directed" | "bidirectional" }>;
+  layerCriteriaDoc: Prompt3Response;
+}): string {
+  return [
+    "Phase 1 spec:",
+    JSON.stringify(phase1View(args.spec), null, 2),
+    "",
+    `Depth: ${args.depth}`,
+    "",
+    "All nodes at this depth:",
+    JSON.stringify(args.nodes, null, 2),
+    "",
+    "All edges at this depth:",
+    JSON.stringify(args.edges, null, 2),
+    "",
+    "Layer definition:",
+    JSON.stringify(args.layerCriteriaDoc, null, 2)
   ].join("\n");
 }
 

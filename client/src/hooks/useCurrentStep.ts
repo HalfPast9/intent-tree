@@ -10,6 +10,7 @@ export type StepName =
   | "layer definition"
   | "node proposals"
   | "validation"
+  | "edge validation"
   | "collective check"
   | "syntax check"
   | "leaf determination"
@@ -64,7 +65,10 @@ export function useCurrentStep(sessionId: string | null, depth: number | null) {
     const anyFailed = nodes.some((n) => latestVal.get(n.id) === "node_validation_failed");
     if (anyFailed) return "validation";
 
-    // Rule 6: collective check
+    // Rule 6: edge validation
+    if (!layerEvents.some((e) => e.type === "edge_validation_passed")) return "edge validation";
+
+    // Rule 7: collective check
     if (!layerEvents.some((e) => e.type === "collective_vertical_passed")) return "collective check";
 
     // Rule 7: syntax check

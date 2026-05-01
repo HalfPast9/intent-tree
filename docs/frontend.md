@@ -1,5 +1,5 @@
 # Intent Tree — Frontend Specification
-> V1 build target. Last updated: 2026-04-24. Backend is source of truth.
+> V1 build target. Last updated: 2026-05-01. Backend is source of truth.
 
 ---
 
@@ -122,11 +122,13 @@ Derivation logic (checked in order for the current `current_depth`):
 3. **Layer definition locked, no nodes at this depth** → step: `node proposals`
 4. **Nodes exist, not all have a validation event** → step: `validation`
 5. **Any node's most recent validation event is `node_validation_failed`** → step: `validation` (with failures)
-6. **All nodes passed individually, no `collective_vertical_passed` event for this depth** → step: `collective check`
-7. **Collective passed, no `syntax_check_passed` event for this depth** → step: `syntax check`
-8. **Syntax passed, layer not yet locked** → frontend auto-triggers `POST /api/phase2/layer/:depth/lock` (layer lock is not a human gate — see `intent-tree.md` Section 6). Show progress indicator while locking. **Guard:** the auto-lock mutation must be protected by a `useRef` flag to prevent double-fire on re-render — the derivation condition stays true between when the mutation fires and when the lock event lands in the timeline. Pattern: `const lockFired = useRef(false)`, set `true` before calling the mutation, reset when `session.id + session.current_depth` changes (not depth alone — a new session can reset depth to 0).
-9. **Layer locked, no `node_leaf_confirmed` events for nodes at this depth** → step: `leaf determination`
-10. **Leaf determination confirmed** → step: `locked` (show summary + next layer button)
+6. **All nodes passed individually, no `edge_validation_passed` event for this depth** → step: `edge validation`
+7. **Edge validation passed, no `collective_vertical_passed` event for this depth** → step: `collective check`
+8. **Collective passed, no `syntax_check_passed` event for this depth** → step: `syntax check`
+9. **Syntax passed, layer not yet locked** → step: `idle` — frontend auto-triggers `POST /api/phase2/layer/:depth/lock` (layer lock is not a human gate — see `intent-tree.md` Section 6). Show progress indicator while locking. **Guard:** the auto-lock mutation must be protected by a `useRef` flag to prevent double-fire on re-render — the derivation condition stays true between when the mutation fires and when the lock event lands in the timeline. Pattern: `const lockFired = useRef(false)`, set `true` before calling the mutation, reset when `session.id + session.current_depth` changes (not depth alone — a new session can reset depth to 0).
+10. **Layer locked, no `node_leaf_confirmed` events for nodes at this depth** → step: `leaf determination`
+11. **Leaf determination confirmed** → step: `locked` (show summary + next layer button)
+12. **All layers complete, no non-leaf nodes without children** → step: `phase2 complete`
 
 Note: The backend requires nodes to be in `locked` state before `POST .../leaf/determine` can run. The frontend must wait for the lock call to complete before showing the leaf determination UI.
 
@@ -259,7 +261,7 @@ Three regions: sidebar (220px), DAG canvas (flex), right panel (300px).
 Fixed, 42px. Same brand mark as Phase 1.
 
 - `phase 2 · layer N · <step>` — updates as the loop progresses. Step is derived client-side (see Section 4.6)
-- Step label values: `layer definition` · `node proposals` · `validation` · `collective check` · `syntax check` · `leaf determination` · `locked`
+- Step label values: `idle` · `layer definition` · `node proposals` · `validation` · `edge validation` · `collective check` · `syntax check` · `leaf determination` · `locked` · `phase2 complete`
 - Badges: node count, proposed/failed count derived from display states (see Section 4.5) — amber for proposed, red for failed
 - Pulsing teal dot when any LLM call is in flight
 
@@ -577,7 +579,32 @@ Shown while validation is running (polling node states). Not a human gate — bu
 
 Live — polls `GET /api/phase2/layer/:depth/nodes` every 3s (see Section 13.1). Node pass/fail status is determined by derived display state (Section 4.5) — a node whose most recent validation event is `node_validation_passed` shows `✓`, one with `node_validation_failed` shows `✕`. Diagnose button appears immediately when any node fails. Multiple failing nodes show multiple diagnose buttons.
 
-### 10.5 Failure diagnosis
+### 10.5 Edge validation result
+
+Triggered after `POST /api/phase2/layer/:depth/validate/edges` returns. Fires after all nodes pass individual validation, before collective check.
+
+```
+  EDGE VALIDATION · L2
+  ─────────────────────────────────────────
+  ✕  L1-svc-a → L1-svc-b
+     interface_incompatible
+     source outputs JSON but target expects protobuf
+
+  ✓  L1-svc-b → L1-svc-c
+
+  MISSING EDGES
+  L1-svc-a → L1-svc-c
+  "svc-a produces events that svc-c must consume"
+  interface: EventStream<OrderEvent> · directed
+
+  [Re-run edge validation]
+```
+
+Shows each existing edge with pass/fail status. Failed edges list issue types (`interface_incompatible`, `direction_incorrect`, `interface_vague`) with descriptions. Missing edges show rationale and suggested interface/direction.
+
+If edge validation passed, this state is skipped and the Step tab advances to collective check automatically.
+
+### 10.6 Failure diagnosis
 
 Triggered after `POST /api/phase2/diagnose/:nodeId` returns.
 
@@ -641,7 +668,7 @@ After confirm on a **design error**, upward traversal is shown:
 
 Trigger calls `POST /api/phase2/traverse/upward` with `{"origin_nodes": [...]}`.
 
-### 10.6 Collective vertical check result
+### 10.7 Collective vertical check result
 
 Triggered after `POST /api/phase2/layer/:depth/validate/collective` returns with failures.
 
@@ -663,7 +690,7 @@ Re-propose is a two-step flow. Each "Re-propose" button calls `POST /api/phase2/
 
 If collective check passed, this state is skipped and the Step tab advances automatically.
 
-### 10.7 Syntax check result
+### 10.8 Syntax check result
 
 Triggered after `POST /api/phase2/layer/:depth/validate/syntax` returns with errors.
 
@@ -681,9 +708,9 @@ Triggered after `POST /api/phase2/layer/:depth/validate/syntax` returns with err
   [Re-run syntax check]
 ```
 
-No automated resolution — the user must fix via node edit (`PATCH /api/phase2/layer/:depth/node/:nodeId`) or the LLM rewrite flow. After fixing, the "Re-run syntax check" button calls `POST /api/phase2/layer/:depth/validate/syntax` again. If syntax passes, the frontend auto-triggers layer lock (see Section 4.6 rule 8), then advances to leaf determination.
+No automated resolution — the user must fix via node edit (`PATCH /api/phase2/layer/:depth/node/:nodeId`) or the LLM rewrite flow. After fixing, the "Re-run syntax check" button calls `POST /api/phase2/layer/:depth/validate/syntax` again. If syntax passes, the frontend auto-triggers layer lock (see Section 4.6 rule 9), then advances to leaf determination.
 
-### 10.8 Leaf determination
+### 10.9 Leaf determination
 
 Triggered after `POST /api/phase2/layer/:depth/leaf/determine` returns.
 
@@ -715,9 +742,9 @@ Triggered after `POST /api/phase2/layer/:depth/leaf/determine` returns.
 
 Toggle buttons per node. Confirm sends `POST .../leaf/confirm` with body `{"overrides": {"nodeId": "leaf" | "decompose_further"}}`. Only include nodes the user toggled — omitted nodes accept the LLM determination. Send empty body `{}` to accept all LLM determinations as-is.
 
-### 10.9 Layer complete
+### 10.10 Layer complete
 
-Shown after leaf determinations are confirmed (`POST .../leaf/confirm`). The layer was auto-locked before leaf determination (see Section 4.6 rule 8). After confirm, the frontend calls `GET /api/phase2/exit-check` to determine if more layers are needed.
+Shown after leaf determinations are confirmed (`POST .../leaf/confirm`). The layer was auto-locked before leaf determination (see Section 4.6 rule 9). After confirm, the frontend calls `GET /api/phase2/exit-check` to determine if more layers are needed.
 
 If `exit-check` returns `complete: false`:
 
@@ -739,7 +766,7 @@ The `decompose_further_ids` from the exit check populate the "will decompose" li
 
 If `exit-check` returns `complete: true`, the frontend shows a "Lock Phase 2" button that calls `POST /api/phase2/lock`.
 
-### 10.10 Phase 2 complete
+### 10.11 Phase 2 complete
 
 Shown after `POST /api/phase2/lock` succeeds.
 

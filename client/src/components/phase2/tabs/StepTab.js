@@ -8,6 +8,7 @@ import { StepLayerDefinition } from "@/components/phase2/tabs/step-views/StepLay
 import { StepNodeProposals } from "@/components/phase2/tabs/step-views/StepNodeProposals";
 import { StepValidation } from "@/components/phase2/tabs/step-views/StepValidation";
 import { StepDiagnosis } from "@/components/phase2/tabs/step-views/StepDiagnosis";
+import { StepEdgeValidation } from "@/components/phase2/tabs/step-views/StepEdgeValidation";
 import { StepCollectiveCheck } from "@/components/phase2/tabs/step-views/StepCollectiveCheck";
 import { StepSyntaxCheck } from "@/components/phase2/tabs/step-views/StepSyntaxCheck";
 import { StepLeafDetermination } from "@/components/phase2/tabs/step-views/StepLeafDetermination";
@@ -68,6 +69,8 @@ export function StepTab({ depth, step, status, nodes, states, definition }) {
         }
         return _jsx(StepValidation, { depth: depth, nodes: nodes, states: states, onDiagnose: (id) => void handleDiagnose(id), diagnosing: diagnosing });
     }
+    if (step === "edge validation")
+        return _jsx(StepEdgeValidation, { depth: depth });
     if (step === "collective check") {
         const parentIds = Array.from(new Set(nodes.flatMap((n) => n.parents)));
         return _jsx(StepCollectiveCheck, { depth: depth, parentIds: parentIds });
