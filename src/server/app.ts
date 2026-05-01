@@ -624,7 +624,7 @@ export function createApp() {
       }
 
       const result = await traverseUpward(originNodes);
-      res.json(ok({ invalidated: result.invalidated }));
+      res.json(ok({ invalidated: result.invalidated, depth: result.depth }));
     } catch (error) {
       next(error);
     }

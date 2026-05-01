@@ -27,7 +27,8 @@ type StepTabProps = {
   timeline: any[];
 };
 
-export function StepTab({ depth, step, status, nodes, states, definition }: StepTabProps) {
+export function StepTab({ depth, step, status, nodes: allNodes, states, definition }: StepTabProps) {
+  const nodes = allNodes.filter((n) => n.state !== "invalidated");
   const [exitCheck, setExitCheck] = useState<ExitCheckResult | null>(null);
   const [diagnosis, setDiagnosis] = useState<{ nodeId: string; result: DiagnosisResult } | null>(null);
   const [diagnosing, setDiagnosing] = useState<string | null>(null);

@@ -56,9 +56,14 @@ export function StepCollectiveCheck({ depth, parentIds }: { depth: number; paren
       <div className="mono" style={{ fontSize: 10, color: "var(--tx2)" }}>COLLECTIVE CHECK · L{depth}</div>
 
       {!coverage && (
-        <button className="btn" onClick={() => void run()} disabled={collective.isPending}>
-          {collective.isPending && <Spinner />}run collective check
-        </button>
+        <div style={{ display: "grid", gap: 8 }}>
+          <button className="btn" onClick={() => void run()} disabled={collective.isPending}>
+            {collective.isPending && <Spinner />}run collective check
+          </button>
+          {collective.isPending && (
+            <div style={{ fontSize: 11, color: "var(--tx2)" }}>LLM is checking coverage — this may take a moment...</div>
+          )}
+        </div>
       )}
 
       {coverage && (

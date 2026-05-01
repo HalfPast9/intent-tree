@@ -43,9 +43,14 @@ export function StepNodeProposals({
     <div>
       <div className="mono" style={{ fontSize: 10, color: "var(--tx2)", marginBottom: 8 }}>NODE PROPOSALS · L{depth}</div>
       {displayNodes.length === 0 ? (
-        <button className="btn btn-pri" onClick={() => void proposeNow()} disabled={propose.isPending}>
-          {propose.isPending && <Spinner />}propose nodes
-        </button>
+        <div style={{ display: "grid", gap: 8 }}>
+          <button className="btn btn-pri" onClick={() => void proposeNow()} disabled={propose.isPending}>
+            {propose.isPending && <Spinner />}propose nodes
+          </button>
+          {propose.isPending && (
+            <div style={{ fontSize: 11, color: "var(--tx2)" }}>LLM is decomposing — this may take 30+ seconds per parent...</div>
+          )}
+        </div>
       ) : (
         <>
           <div style={{ display: "grid", gap: 6, maxHeight: 320, overflow: "auto" }}>

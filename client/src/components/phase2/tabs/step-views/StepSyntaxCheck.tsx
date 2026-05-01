@@ -27,6 +27,9 @@ export function StepSyntaxCheck({ depth }: { depth: number }) {
           {syntax.isPending && <Spinner />}run syntax check
         </button>
       )}
+      {errors === null && syntax.isPending && (
+        <div style={{ fontSize: 11, color: "var(--tx2)", marginTop: 6 }}>Checking structural rules...</div>
+      )}
 
       {errors !== null && (
         <div>

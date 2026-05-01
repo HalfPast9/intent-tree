@@ -14,7 +14,8 @@ import { StepSyntaxCheck } from "@/components/phase2/tabs/step-views/StepSyntaxC
 import { StepLeafDetermination } from "@/components/phase2/tabs/step-views/StepLeafDetermination";
 import { StepLayerComplete } from "@/components/phase2/tabs/step-views/StepLayerComplete";
 import { StepPhase2Complete } from "@/components/phase2/tabs/step-views/StepPhase2Complete";
-export function StepTab({ depth, step, status, nodes, states, definition }) {
+export function StepTab({ depth, step, status, nodes: allNodes, states, definition }) {
+    const nodes = allNodes.filter((n) => n.state !== "invalidated");
     const [exitCheck, setExitCheck] = useState(null);
     const [diagnosis, setDiagnosis] = useState(null);
     const [diagnosing, setDiagnosing] = useState(null);

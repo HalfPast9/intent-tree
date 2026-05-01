@@ -15,6 +15,8 @@ type Props = {
 export function StepDiagnosis({ nodeId, result, onDone }: Props) {
   const [classification, setClassification] = useState<"implementation" | "design">(result.classification);
   const [confirmed, setConfirmed] = useState(false);
+  const [rewriteResult, setRewriteResult] = useState<{ passed: boolean } | null>(null);
+  const [traversalResult, setTraversalResult] = useState<{ invalidated: string[]; depth: number | null } | null>(null);
   const confirmDiag = useConfirmDiagnosis();
   const rewrite = useRewriteNode();
   const traverse = useTraverseUpward();
@@ -36,8 +38,9 @@ export function StepDiagnosis({ nodeId, result, onDone }: Props) {
 
   const onRewrite = async () => {
     try {
-      await rewrite.mutateAsync({ nodeId });
-      onDone();
+      const data = await rewrite.mutateAsync({ nodeId });
+      const validation = (data as { validation?: { passed: boolean } }).validation;
+      setRewriteResult({ passed: validation?.passed ?? false });
     } catch (error) {
       pushToast(error instanceof Error ? error.message : "Rewrite failed", "error");
     }
@@ -45,8 +48,9 @@ export function StepDiagnosis({ nodeId, result, onDone }: Props) {
 
   const onTraverse = async () => {
     try {
-      await traverse.mutateAsync({ origin_nodes: result.origin_nodes });
-      onDone();
+      const data = await traverse.mutateAsync({ origin_nodes: result.origin_nodes });
+      const resp = data as { invalidated: string[]; depth: number | null };
+      setTraversalResult({ invalidated: resp.invalidated, depth: resp.depth });
     } catch (error) {
       pushToast(error instanceof Error ? error.message : "Traversal failed", "error");
     }
@@ -96,7 +100,7 @@ export function StepDiagnosis({ nodeId, result, onDone }: Props) {
         </button>
       )}
 
-      {confirmed && classification === "implementation" && (
+      {confirmed && classification === "implementation" && !rewriteResult && (
         <div>
           <div style={{ fontSize: 11, color: "var(--tx2)", marginBottom: 8 }}>Implementation error confirmed. Rewrite node based on failed checklist items.</div>
           <button className="btn btn-pri" onClick={() => void onRewrite()} disabled={rewrite.isPending}>
@@ -105,15 +109,50 @@ export function StepDiagnosis({ nodeId, result, onDone }: Props) {
         </div>
       )}
 
-      {confirmed && classification === "design" && result.origin_nodes.length > 0 && (
+      {rewriteResult && (
+        <div style={{ display: "grid", gap: 6, marginTop: 4 }}>
+          <div style={{ fontSize: 11, color: rewriteResult.passed ? "var(--passed)" : "var(--failed)" }}>
+            {rewriteResult.passed
+              ? "✓ Rewrite complete — node passed re-validation."
+              : "✕ Rewrite complete — node still failing. May need another diagnosis."}
+          </div>
+          <button className="btn" onClick={onDone} style={{ marginTop: 4 }}>
+            back to validation
+          </button>
+        </div>
+      )}
+
+      {confirmed && classification === "design" && result.origin_nodes.length > 0 && !traversalResult && (
         <div>
           <div className="mono" style={{ fontSize: 10, color: "var(--tx3)", marginBottom: 4 }}>ORIGIN NODES</div>
           {result.origin_nodes.map((id) => (
             <div key={id} className="mono" style={{ fontSize: 10, color: "var(--tx2)" }}>· {id}</div>
           ))}
-          <div style={{ fontSize: 11, color: "var(--tx2)", margin: "8px 0" }}>Design error confirmed. Trigger upward traversal to invalidate origin nodes.</div>
+          <div style={{ fontSize: 11, color: "var(--tx2)", margin: "8px 0" }}>Design error confirmed. Trigger upward traversal to invalidate origin nodes and return to the affected layer.</div>
           <button className="btn btn-pri" onClick={() => void onTraverse()} disabled={traverse.isPending} style={{ borderColor: "var(--failed)", color: "var(--failed)", background: "var(--bg-failed)" }}>
             {traverse.isPending && <Spinner />}trigger upward traversal
+          </button>
+        </div>
+      )}
+
+      {traversalResult && (
+        <div style={{ display: "grid", gap: 6, marginTop: 4 }}>
+          <div style={{ fontSize: 11, color: "var(--tx2)" }}>
+            Upward traversal complete. {traversalResult.invalidated.length} node(s) invalidated.
+          </div>
+          {traversalResult.invalidated.slice(0, 10).map((id) => (
+            <div key={id} className="mono" style={{ fontSize: 10, color: "var(--failed)" }}>· {id}</div>
+          ))}
+          {traversalResult.invalidated.length > 10 && (
+            <div className="mono" style={{ fontSize: 10, color: "var(--tx3)" }}>+ {traversalResult.invalidated.length - 10} more</div>
+          )}
+          {traversalResult.depth !== null && (
+            <div style={{ fontSize: 11, color: "var(--acc)", marginTop: 4 }}>
+              Returning to layer {traversalResult.depth} to re-propose invalidated nodes.
+            </div>
+          )}
+          <button className="btn" onClick={onDone} style={{ marginTop: 4 }}>
+            acknowledge
           </button>
         </div>
       )}

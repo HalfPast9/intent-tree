@@ -37,9 +37,14 @@ export function StepLeafDetermination({ depth, nodes }: { depth: number; nodes: 
     <div>
       <div className="mono" style={{ fontSize: 10, color: "var(--tx2)", marginBottom: 8 }}>LEAF DETERMINATION · L{depth}</div>
       {!leafReady && (
-        <button className="btn" onClick={() => void onDetermine()} disabled={determine.isPending}>
-          {determine.isPending && <Spinner />}determine leaf nodes
-        </button>
+        <div style={{ display: "grid", gap: 8 }}>
+          <button className="btn" onClick={() => void onDetermine()} disabled={determine.isPending}>
+            {determine.isPending && <Spinner />}determine leaf nodes
+          </button>
+          {determine.isPending && (
+            <div style={{ fontSize: 11, color: "var(--tx2)" }}>LLM is classifying nodes — this may take a moment...</div>
+          )}
+        </div>
       )}
       {leafReady && (
         <>

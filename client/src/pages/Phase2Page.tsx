@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useIsMutating, useQueries } from "@tanstack/react-query";
 
 import type { DisplayState, NodeView } from "@/api/types";
 import { apiFetch } from "@/api/client";
@@ -40,6 +40,7 @@ export function Phase2Page() {
   const depth = session?.current_depth ?? 0;
 
   const stepQ = useCurrentStep(session?.id ?? null, depth);
+  const mutatingCount = useIsMutating();
 
   // Current layer nodes — poll during validation
   const currentNodesQ = useLayerNodes(depth, stepQ.step === "validation");
@@ -92,7 +93,7 @@ export function Phase2Page() {
 
   return (
     <>
-      <Header phase="phase 2" label={`layer ${depth} · ${stepQ.status === "deriving" ? "..." : (stepQ.step ?? "idle")}`} llmBusy={false} states={allStates} />
+      <Header phase="phase 2" label={`layer ${depth} · ${stepQ.status === "deriving" ? "..." : (stepQ.step ?? "idle")}`} llmBusy={mutatingCount > 0} states={allStates} />
       <main className="main layout-phase2">
         <Sidebar mode={sidebarMode} setMode={setSidebarMode}>
           {sidebarMode === "tree" ? (

@@ -1,6 +1,6 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useMemo, useState } from "react";
-import { useQueries } from "@tanstack/react-query";
+import { useIsMutating, useQueries } from "@tanstack/react-query";
 import { apiFetch } from "@/api/client";
 import { Header } from "@/components/shared/Header";
 import { Sidebar } from "@/components/phase2/Sidebar";
@@ -34,6 +34,7 @@ export function Phase2Page() {
     const session = sessionQ.data?.session ?? null;
     const depth = session?.current_depth ?? 0;
     const stepQ = useCurrentStep(session?.id ?? null, depth);
+    const mutatingCount = useIsMutating();
     // Current layer nodes — poll during validation
     const currentNodesQ = useLayerNodes(depth, stepQ.step === "validation");
     const currentNodes = currentNodesQ.data?.nodes ?? [];
@@ -75,7 +76,7 @@ export function Phase2Page() {
     const displayStates = useMemo(() => buildDisplayStateMap(allNodes, timeline), [allNodes, timeline]);
     const selectedNode = allNodes.find((n) => n.id === selectedNodeId) ?? null;
     const allStates = currentNodes.map((n) => displayStates[n.id] ?? "pending");
-    return (_jsxs(_Fragment, { children: [_jsx(Header, { phase: "phase 2", label: `layer ${depth} · ${stepQ.status === "deriving" ? "..." : (stepQ.step ?? "idle")}`, llmBusy: false, states: allStates }), _jsxs("main", { className: "main layout-phase2", children: [_jsx(Sidebar, { mode: sidebarMode, setMode: setSidebarMode, children: sidebarMode === "tree" ? (_jsx(LayerTree, { stackLayers: stackLayers, groupedNodes: groupedNodes, displayStates: displayStates, selectedNodeId: selectedNodeId, onSelectNode: (id) => {
+    return (_jsxs(_Fragment, { children: [_jsx(Header, { phase: "phase 2", label: `layer ${depth} · ${stepQ.status === "deriving" ? "..." : (stepQ.step ?? "idle")}`, llmBusy: mutatingCount > 0, states: allStates }), _jsxs("main", { className: "main layout-phase2", children: [_jsx(Sidebar, { mode: sidebarMode, setMode: setSidebarMode, children: sidebarMode === "tree" ? (_jsx(LayerTree, { stackLayers: stackLayers, groupedNodes: groupedNodes, displayStates: displayStates, selectedNodeId: selectedNodeId, onSelectNode: (id) => {
                                 setSelectedNodeId(id);
                                 setSelectedEdge(null);
                                 setActiveTab("node");

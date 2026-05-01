@@ -45,9 +45,14 @@ export function StepEdgeValidation({ depth }: { depth: number }) {
       <div className="mono" style={{ fontSize: 10, color: "var(--tx2)" }}>EDGE VALIDATION · L{depth}</div>
 
       {!result && (
-        <button className="btn" onClick={() => void run()} disabled={edgeValidation.isPending}>
-          {edgeValidation.isPending && <Spinner />}run edge validation
-        </button>
+        <div style={{ display: "grid", gap: 8 }}>
+          <button className="btn" onClick={() => void run()} disabled={edgeValidation.isPending}>
+            {edgeValidation.isPending && <Spinner />}run edge validation
+          </button>
+          {edgeValidation.isPending && (
+            <div style={{ fontSize: 11, color: "var(--tx2)" }}>LLM is checking edges — this may take a moment...</div>
+          )}
+        </div>
       )}
 
       {result && (

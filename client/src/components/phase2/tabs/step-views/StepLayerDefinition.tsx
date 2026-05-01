@@ -115,11 +115,14 @@ export function StepLayerDefinition({ depth, definition }: Props) {
       <div className="mono" style={{ fontSize: 10, color: "var(--tx2)" }}>LAYER DEFINITION · L{depth}</div>
 
       {!hasDefinition && (
-        <div>
-          <div style={{ fontSize: 12, color: "var(--tx2)", marginBottom: 8 }}>No definition yet for this layer.</div>
+        <div style={{ display: "grid", gap: 8 }}>
+          <div style={{ fontSize: 12, color: "var(--tx2)" }}>No definition yet for this layer.</div>
           <button className="btn btn-pri" onClick={() => void onGenerate()} disabled={generate.isPending}>
             {generate.isPending && <Spinner />}generate definition
           </button>
+          {generate.isPending && (
+            <div style={{ fontSize: 11, color: "var(--tx2)" }}>LLM is defining layer — this may take a moment...</div>
+          )}
         </div>
       )}
 

@@ -23,13 +23,15 @@ export function useCurrentStep(sessionId, depth) {
         const definition = defQ.data?.definition;
         const nodes = nodesQ.data?.nodes ?? [];
         const events = timelineQ.data?.timeline ?? [];
+        // Exclude invalidated nodes from step derivation
+        const activeNodes = nodes.filter((n) => n.state !== "invalidated");
         // Layer events: filter by depth in payload
         const layerEvents = events.filter((e) => e.payload?.depth === depth);
         // Rules 1–2: layer definition
         if (!definition || !definition.locked)
             return "layer definition";
-        // Rule 3: no nodes yet
-        if (nodes.length === 0)
+        // Rule 3: no nodes yet (or all invalidated after traversal)
+        if (activeNodes.length === 0)
             return "node proposals";
         // Rules 4–5: individual validation — track most recent validation event per node
         const latestVal = new Map();
@@ -40,20 +42,44 @@ export function useCurrentStep(sessionId, depth) {
                 }
             }
         }
-        const allValidated = nodes.every((n) => latestVal.has(n.id));
+        const allValidated = activeNodes.every((n) => latestVal.has(n.id));
         if (!allValidated)
             return "validation";
-        const anyFailed = nodes.some((n) => latestVal.get(n.id) === "node_validation_failed");
+        const anyFailed = activeNodes.some((n) => latestVal.get(n.id) === "node_validation_failed");
         if (anyFailed)
             return "validation";
+        // Staleness detection: layer-level pass events must be more recent than the last
+        // node-change event, otherwise the check needs to re-run against the new state.
+        const activeNodeIds = new Set(activeNodes.map((n) => n.id));
+        const nodeChangeTypes = new Set([
+            "node_proposed", "node_checklist_approved", "node_rewritten",
+            "node_claimed", "node_claim_rejected"
+        ]);
+        const latestNodeChangeTs = events
+            .filter((e) => nodeChangeTypes.has(e.type) && (e.payload?.depth === depth ||
+            (e.node_ids ?? []).some((id) => activeNodeIds.has(id))))
+            .reduce((max, e) => {
+            const t = new Date(e.timestamp).getTime();
+            return t > max ? t : max;
+        }, 0);
+        const isFreshPass = (eventType) => {
+            const passEvents = layerEvents.filter((e) => e.type === eventType);
+            if (passEvents.length === 0)
+                return false;
+            const latest = passEvents.reduce((best, e) => {
+                const t = new Date(e.timestamp).getTime();
+                return t > best ? t : best;
+            }, 0);
+            return latest > latestNodeChangeTs;
+        };
         // Rule 6: edge validation
-        if (!layerEvents.some((e) => e.type === "edge_validation_passed"))
+        if (!isFreshPass("edge_validation_passed"))
             return "edge validation";
         // Rule 7: collective check
-        if (!layerEvents.some((e) => e.type === "collective_vertical_passed"))
+        if (!isFreshPass("collective_vertical_passed"))
             return "collective check";
-        // Rule 7: syntax check
-        if (!layerEvents.some((e) => e.type === "syntax_check_passed"))
+        // Rule 8: syntax check
+        if (!isFreshPass("syntax_check_passed"))
             return "syntax check";
         // Rule 8: layer lock (auto-triggered via useEffect)
         const allLocked = statusQ.data?.nodes.every((n) => n.state === "locked") ?? false;

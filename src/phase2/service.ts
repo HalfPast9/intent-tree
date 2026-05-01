@@ -624,9 +624,19 @@ function getCurrentLayerMeta(stackLayers: StackLayerInput[], depth: number): {
   };
 }
 
+function buildRootIntent(spec: ProblemSpec): string {
+  const parts = [spec.problem_statement];
+  if (spec.hard_constraints) parts.push(`Hard constraints: ${spec.hard_constraints}`);
+  if (spec.optimization_targets) parts.push(`Optimization targets: ${spec.optimization_targets}`);
+  if (spec.nfrs) parts.push(`NFRs: ${spec.nfrs}`);
+  if (spec.success_criteria) parts.push(`Success criteria: ${spec.success_criteria}`);
+  if (spec.assumptions) parts.push(`Assumptions: ${spec.assumptions}`);
+  return parts.join("\n\n");
+}
+
 async function getParentIntents(spec: ProblemSpec, depth: number): Promise<string[]> {
   if (depth === 0) {
-    return [spec.problem_statement];
+    return [buildRootIntent(spec)];
   }
 
   const parentNodes = await getNodesByDepth(depth - 1);
@@ -858,7 +868,7 @@ export async function proposeLayerNodes(depth: number): Promise<Phase2NodeView[]
 
   const parents: Array<{ id: string; intent: string; inputs: string; outputs: string } | { id: "root"; intent: string }> = [];
   if (depth === 0) {
-    parents.push({ id: "root", intent: spec.problem_statement });
+    parents.push({ id: "root", intent: buildRootIntent(spec) });
   } else {
     const allParentNodes = await getNodesByDepth(depth - 1);
     const parentNodes = allParentNodes.filter((n) => n.leaf !== true);
@@ -1197,7 +1207,7 @@ export async function reproposeParent(
 
   let parent: { id: string; intent: string; inputs: string; outputs: string } | { id: "root"; intent: string };
   if (parentId === "root") {
-    parent = { id: "root", intent: spec.problem_statement };
+    parent = { id: "root", intent: buildRootIntent(spec) };
   } else {
     const parentNode = await getArchNodeById(parentId);
     if (!parentNode) throw new Error(`Parent node ${parentId} not found.`);
@@ -1409,7 +1419,7 @@ export async function runCollectiveVerticalCheck(depth: number): Promise<Prompt6
 
   const parents: Array<{ id: string; intent: string; inputs: string; outputs: string }> =
     depth === 0
-      ? [{ id: "root", intent: spec.problem_statement, inputs: "", outputs: "" }]
+      ? [{ id: "root", intent: buildRootIntent(spec), inputs: "", outputs: "" }]
       : (await getNodesByDepth(depth - 1)).map((p) => ({
           id: p.id,
           intent: p.intent,
@@ -2097,10 +2107,11 @@ export async function confirmDiagnosis(
   return resolved;
 }
 
-export async function traverseUpward(originNodeIds: string[]): Promise<{ invalidated: string[] }> {
+export async function traverseUpward(originNodeIds: string[]): Promise<{ invalidated: string[]; depth: number | null }> {
   await emitEvent("upward_traversal_triggered", "human", { origin_nodes: originNodeIds }, []);
 
   const allNodes = await getAllNodes();
+  const nodeMap = new Map(allNodes.map((n) => [n.id, n]));
 
   const childrenMap = new Map<string, string[]>();
   for (const node of allNodes) {
@@ -2139,6 +2150,20 @@ export async function traverseUpward(originNodeIds: string[]): Promise<{ invalid
 
   await emitEvent("upward_traversal_completed", "llm", { origin_nodes: originNodeIds, invalidated }, []);
 
-  return { invalidated };
+  // Navigate session to the shallowest affected depth so the user lands at the right layer
+  let shallowestDepth: number | null = null;
+  for (const originId of originNodeIds) {
+    const node = nodeMap.get(originId);
+    if (node && (shallowestDepth === null || node.depth < shallowestDepth)) {
+      shallowestDepth = node.depth;
+    }
+  }
+
+  if (shallowestDepth !== null) {
+    const session = await getCurrentSession();
+    await updateSession(session.id, { current_depth: shallowestDepth });
+  }
+
+  return { invalidated, depth: shallowestDepth };
 }
 
