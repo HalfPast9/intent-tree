@@ -624,7 +624,14 @@ export function createApp() {
   app.get("/api/state/timeline", async (_req, res, next) => {
     try {
       const events = await getFullTimeline();
-      res.json(ok({ timeline: events }));
+      const parsed = events.map((e) => {
+        try {
+          return { ...e, payload: typeof e.payload === "string" ? JSON.parse(e.payload) : e.payload };
+        } catch {
+          return e;
+        }
+      });
+      res.json(ok({ timeline: parsed }));
     } catch (error) {
       next(error);
     }
@@ -633,7 +640,14 @@ export function createApp() {
   app.get("/api/state/node/:nodeId/history", async (req, res, next) => {
     try {
       const history = await getEventHistory(req.params.nodeId);
-      res.json(ok({ node_id: req.params.nodeId, history }));
+      const parsed = history.map((e) => {
+        try {
+          return { ...e, payload: typeof e.payload === "string" ? JSON.parse(e.payload) : e.payload };
+        } catch {
+          return e;
+        }
+      });
+      res.json(ok({ node_id: req.params.nodeId, history: parsed }));
     } catch (error) {
       next(error);
     }

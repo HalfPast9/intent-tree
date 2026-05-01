@@ -27,7 +27,7 @@ export function EventStream({ events }: { events: EventRecord[] }) {
             <span style={{ color: "var(--tx3)" }}>{new Date(event.timestamp).toLocaleTimeString()}</span>
             <div style={{ minWidth: 0 }}>
               <div style={{ color }}>{event.type}</div>
-              <div style={{ color: "var(--tx3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{summarizePayload(event.payload ?? {})}</div>
+              <div style={{ color: "var(--tx3)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{summarizePayload(typeof event.payload === "string" ? (JSON.parse(event.payload) as Record<string, unknown>) : (event.payload ?? {}))}</div>
             </div>
           </div>
         );

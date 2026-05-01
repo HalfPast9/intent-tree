@@ -83,7 +83,7 @@ export function StepTab({ depth, step, status, nodes, states, definition }: Step
         />
       );
     }
-    return <StepValidation nodes={nodes} states={states} onDiagnose={(id) => void handleDiagnose(id)} diagnosing={diagnosing} />;
+    return <StepValidation depth={depth} nodes={nodes} states={states} onDiagnose={(id) => void handleDiagnose(id)} diagnosing={diagnosing} />;
   }
   if (step === "collective check") {
     const parentIds = Array.from(new Set(nodes.flatMap((n) => n.parents)));

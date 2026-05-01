@@ -29,7 +29,9 @@ export function RightPanel(props: RightPanelProps) {
         border: "none",
         borderBottom: props.activeTab === id ? "2px solid var(--acc)" : "2px solid transparent",
         borderRadius: 0,
-        padding: "8px 10px"
+        padding: "8px 10px",
+        minWidth: 0,
+        flex: 1
       }}
     >
       {label}

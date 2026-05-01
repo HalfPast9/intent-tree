@@ -6,9 +6,10 @@ import { useApproveRepropose } from "@/hooks/mutation/useApproveRepropose";
 import { useToast } from "@/components/shared/Toast";
 
 type CoverageItem = {
-  parent_id: string;
-  covered: boolean;
-  gap?: string;
+  parent: string;
+  fully_covered: boolean;
+  gaps: string[];
+  reasoning: string;
 };
 
 export function StepCollectiveCheck({ depth, parentIds }: { depth: number; parentIds: string[] }) {
@@ -48,7 +49,7 @@ export function StepCollectiveCheck({ depth, parentIds }: { depth: number; paren
     }
   };
 
-  const gapParents = coverage ? coverage.filter((c) => !c.covered).map((c) => c.parent_id) : [];
+  const gapParents = coverage ? coverage.filter((c) => !c.fully_covered).map((c) => c.parent) : [];
 
   return (
     <div style={{ display: "grid", gap: 8 }}>
@@ -63,12 +64,14 @@ export function StepCollectiveCheck({ depth, parentIds }: { depth: number; paren
       {coverage && (
         <div style={{ display: "grid", gap: 6 }}>
           {coverage.map((item) => (
-            <div key={item.parent_id} className="panel" style={{ padding: 8, background: "var(--s2)", borderColor: item.covered ? "var(--bdr)" : "var(--proposed)" }}>
+            <div key={item.parent} className="panel" style={{ padding: 8, background: "var(--s2)", borderColor: item.fully_covered ? "var(--bdr)" : "var(--proposed)" }}>
               <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <span className="mono" style={{ fontSize: 10 }}>{item.parent_id}</span>
-                <span className="mono" style={{ fontSize: 10, color: item.covered ? "var(--passed)" : "var(--failed)" }}>{item.covered ? "✓ covered" : "✕ gap"}</span>
+                <span className="mono" style={{ fontSize: 10 }}>{item.parent}</span>
+                <span className="mono" style={{ fontSize: 10, color: item.fully_covered ? "var(--passed)" : "var(--failed)" }}>{item.fully_covered ? "✓ covered" : "✕ gap"}</span>
               </div>
-              {!item.covered && item.gap && <div style={{ fontSize: 11, color: "var(--tx2)", marginTop: 4 }}>{item.gap}</div>}
+              {!item.fully_covered && item.gaps.length > 0 && (
+                <div style={{ fontSize: 11, color: "var(--tx2)", marginTop: 4 }}>{item.gaps.join("; ")}</div>
+              )}
             </div>
           ))}
 

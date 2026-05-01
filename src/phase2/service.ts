@@ -77,7 +77,7 @@ export interface Phase2NodeView {
   inputs: string;
   outputs: string;
   edges: Array<{ target: string; interface: string; direction: "directed" | "bidirectional" }>;
-  checklist: Array<{ item: string; context: string }>;
+  checklist: string[];
   state: string;
   leaf: boolean | null | undefined;
 }
@@ -1186,7 +1186,7 @@ export async function reproposeParent(
     inputs: node.inputs,
     outputs: node.outputs,
     edges: node.edges,
-    checklist: node.checklist,
+    checklist: node.checklist.map((item) => item.item),
     state: "pending",
     leaf: null
   }));

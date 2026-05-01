@@ -66,7 +66,7 @@ export function StepTab({ depth, step, status, nodes, states, definition }) {
         if (diagnosis) {
             return (_jsx(StepDiagnosis, { nodeId: diagnosis.nodeId, result: diagnosis.result, onDone: () => setDiagnosis(null) }));
         }
-        return _jsx(StepValidation, { nodes: nodes, states: states, onDiagnose: (id) => void handleDiagnose(id), diagnosing: diagnosing });
+        return _jsx(StepValidation, { depth: depth, nodes: nodes, states: states, onDiagnose: (id) => void handleDiagnose(id), diagnosing: diagnosing });
     }
     if (step === "collective check") {
         const parentIds = Array.from(new Set(nodes.flatMap((n) => n.parents)));
