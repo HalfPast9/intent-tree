@@ -24,7 +24,7 @@ export function StepSyntaxCheck({ depth }: { depth: number }) {
 
       {errors === null && (
         <button className="btn" onClick={() => void run()} disabled={syntax.isPending}>
-          {syntax.isPending ? <Spinner /> : "run syntax check"}
+          {syntax.isPending && <Spinner />}run syntax check
         </button>
       )}
 
@@ -42,7 +42,7 @@ export function StepSyntaxCheck({ depth }: { depth: number }) {
               ))}
               <div style={{ fontSize: 11, color: "var(--tx2)" }}>{errors.length} structural error(s) — fix nodes, then re-run.</div>
               <button className="btn" onClick={() => void run()} disabled={syntax.isPending}>
-                {syntax.isPending ? <Spinner /> : "re-run syntax check"}
+                {syntax.isPending && <Spinner />}re-run syntax check
               </button>
             </div>
           )}

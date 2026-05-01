@@ -63,6 +63,14 @@ function parseDepth(value: unknown): number | null {
   return depth;
 }
 
+function serializeCriteriaDoc(doc: unknown) {
+  if (!doc || typeof doc !== "object") return null;
+  const d = doc as Record<string, unknown>;
+  const raw = d.checklist_template;
+  const checklist_template = typeof raw === "string" ? JSON.parse(raw) : raw;
+  return { ...d, checklist_template };
+}
+
 async function collectAllNodes(maxDepth = 20) {
   const nodes: Awaited<ReturnType<typeof getNodesByDepth>> = [];
   let emptyStreak = 0;
@@ -205,7 +213,7 @@ export function createApp() {
       }
 
       const definition = await getLayerCriteriaDocByDepth(depth);
-      res.json(ok({ definition }));
+      res.json(ok({ definition: serializeCriteriaDoc(definition) }));
     } catch (error) {
       next(error);
     }
@@ -223,7 +231,7 @@ export function createApp() {
       const rawStart = getLLMRawLogLength();
       const definition = await generateLayerDefinition(depth);
       const llmRaw = getLLMRawSince(rawStart)[0] ?? null;
-      res.json(ok({ definition }, llmRaw));
+      res.json(ok({ definition: serializeCriteriaDoc(definition) }, llmRaw));
     } catch (error) {
       next(error);
     }
@@ -239,7 +247,7 @@ export function createApp() {
       }
 
       const definition = await approveLayerDefinition(depth, req.body ?? undefined);
-      res.json(ok({ definition }));
+      res.json(ok({ definition: serializeCriteriaDoc(definition) }));
     } catch (error) {
       next(error);
     }

@@ -24,11 +24,12 @@ export function ActionBar({ allFilled, clean, onConflict }) {
         try {
             await lockPhase1.mutateAsync(undefined);
             await queryClient.refetchQueries({ queryKey: ["session"] });
+            pushToast("Phase 1 locked — entering Phase 2", "info");
             navigate("/phase2");
         }
         catch (error) {
             pushToast(error instanceof Error ? error.message : "Phase 1 lock failed", "error");
         }
     };
-    return (_jsxs("div", { className: "panel", style: { marginTop: 10, padding: 10, display: "flex", justifyContent: "flex-end", gap: 8 }, children: [_jsx("button", { className: "btn", disabled: !allFilled || conflictCheck.isPending, onClick: () => void onRunConflict(), children: conflictCheck.isPending ? _jsx(Spinner, {}) : "run conflict check" }), _jsx("button", { className: "btn btn-pri", disabled: !clean || lockPhase1.isPending, onClick: () => void onLock(), children: lockPhase1.isPending ? _jsx(Spinner, {}) : "lock phase 1" })] }));
+    return (_jsxs("div", { className: "panel", style: { marginTop: 10, padding: 10, display: "flex", justifyContent: "flex-end", gap: 8 }, children: [_jsxs("button", { className: "btn", disabled: !allFilled || conflictCheck.isPending, onClick: () => void onRunConflict(), children: [conflictCheck.isPending && _jsx(Spinner, {}), "run conflict check"] }), _jsxs("button", { className: "btn btn-pri", disabled: !clean || lockPhase1.isPending, onClick: () => void onLock(), children: [lockPhase1.isPending && _jsx(Spinner, {}), "lock phase 1"] })] }));
 }

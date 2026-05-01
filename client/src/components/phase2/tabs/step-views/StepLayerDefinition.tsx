@@ -16,13 +16,30 @@ type Draft = {
   checklist_template: string;
 };
 
+function toChecklistArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((v): v is string => typeof v === "string");
+  }
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((v): v is string => typeof v === "string");
+      }
+    } catch {
+      return value.split("\n").map((s) => s.trim()).filter(Boolean);
+    }
+  }
+  return [];
+}
+
 function defToDraft(d: LayerCriteriaDoc | null): Draft {
   return {
     layer_name: d?.layer_name ?? "",
     responsibility_scope: d?.responsibility_scope ?? "",
     considerations: d?.considerations ?? "",
     out_of_scope: d?.out_of_scope ?? "",
-    checklist_template: (d?.checklist_template ?? []).join("\n")
+    checklist_template: toChecklistArray(d?.checklist_template).join("\n")
   };
 }
 
@@ -65,7 +82,7 @@ export function StepLayerDefinition({ depth, definition }: Props) {
       draft.responsibility_scope !== definition.responsibility_scope ||
       draft.considerations !== definition.considerations ||
       draft.out_of_scope !== definition.out_of_scope ||
-      draft.checklist_template !== definition.checklist_template.join("\n");
+      draft.checklist_template !== toChecklistArray(definition.checklist_template).join("\n");
 
   const onGenerate = async () => {
     try {
@@ -101,7 +118,7 @@ export function StepLayerDefinition({ depth, definition }: Props) {
         <div>
           <div style={{ fontSize: 12, color: "var(--tx2)", marginBottom: 8 }}>No definition yet for this layer.</div>
           <button className="btn btn-pri" onClick={() => void onGenerate()} disabled={generate.isPending}>
-            {generate.isPending ? <Spinner /> : "generate definition"}
+            {generate.isPending && <Spinner />}generate definition
           </button>
         </div>
       )}
@@ -130,10 +147,10 @@ export function StepLayerDefinition({ depth, definition }: Props) {
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn" onClick={() => void onGenerate()} disabled={generate.isPending}>
-              {generate.isPending ? <Spinner /> : "regenerate"}
+              {generate.isPending && <Spinner />}regenerate
             </button>
             <button className="btn btn-pri" onClick={() => void onApprove()} disabled={approve.isPending}>
-              {approve.isPending ? <Spinner /> : "approve"}
+              {approve.isPending && <Spinner />}approve
             </button>
           </div>
         </>

@@ -30,6 +30,7 @@ export function StepTab({ depth, step, status, nodes, states, definition }: Step
   const [exitCheck, setExitCheck] = useState<ExitCheckResult | null>(null);
   const [diagnosis, setDiagnosis] = useState<{ nodeId: string; result: DiagnosisResult } | null>(null);
   const [diagnosing, setDiagnosing] = useState<string | null>(null);
+  const [proposedNodes, setProposedNodes] = useState<NodeView[]>([]);
   const diagnoseNode = useDiagnoseNode();
   const { pushToast } = useToast();
 
@@ -45,6 +46,11 @@ export function StepTab({ depth, step, status, nodes, states, definition }: Step
   // Reset diagnosis when step changes away from validation
   useEffect(() => {
     if (step !== "validation") setDiagnosis(null);
+  }, [step]);
+
+  // Reset proposed nodes when leaving the proposals step
+  useEffect(() => {
+    if (step !== "node proposals") setProposedNodes([]);
   }, [step]);
 
   const handleDiagnose = async (nodeId: string) => {
@@ -66,7 +72,7 @@ export function StepTab({ depth, step, status, nodes, states, definition }: Step
   if (step === "phase2 complete") return <StepPhase2Complete />;
   if (step === "idle") return <StepIdle />;
   if (step === "layer definition") return <StepLayerDefinition depth={depth} definition={definition} />;
-  if (step === "node proposals") return <StepNodeProposals depth={depth} nodes={nodes} />;
+  if (step === "node proposals") return <StepNodeProposals depth={depth} nodes={nodes} proposed={proposedNodes} onProposed={setProposedNodes} />;
   if (step === "validation") {
     if (diagnosis) {
       return (

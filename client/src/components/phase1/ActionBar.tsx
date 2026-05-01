@@ -42,10 +42,10 @@ export function ActionBar({ allFilled, clean, onConflict }: ActionBarProps) {
   return (
     <div className="panel" style={{ marginTop: 10, padding: 10, display: "flex", justifyContent: "flex-end", gap: 8 }}>
       <button className="btn" disabled={!allFilled || conflictCheck.isPending} onClick={() => void onRunConflict()}>
-        {conflictCheck.isPending ? <Spinner /> : "run conflict check"}
+        {conflictCheck.isPending && <Spinner />}run conflict check
       </button>
       <button className="btn btn-pri" disabled={!clean || lockPhase1.isPending} onClick={() => void onLock()}>
-        {lockPhase1.isPending ? <Spinner /> : "lock phase 1"}
+        {lockPhase1.isPending && <Spinner />}lock phase 1
       </button>
     </div>
   );

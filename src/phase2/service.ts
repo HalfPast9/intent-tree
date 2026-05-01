@@ -875,7 +875,7 @@ export async function proposeLayerNodes(depth: number): Promise<Phase2NodeView[]
     inputs: node.inputs,
     outputs: node.outputs,
     edges: node.edges,
-    checklist: node.checklist,
+    checklist: node.checklist.map((item) => item.item),
     state: "pending",
     leaf: null
   }));

@@ -92,7 +92,7 @@ export function StepDiagnosis({ nodeId, result, onDone }: Props) {
 
       {!confirmed && (
         <button className="btn btn-pri" onClick={() => void onConfirm()} disabled={confirmDiag.isPending}>
-          {confirmDiag.isPending ? <Spinner /> : "confirm"}
+          {confirmDiag.isPending && <Spinner />}confirm
         </button>
       )}
 
@@ -100,7 +100,7 @@ export function StepDiagnosis({ nodeId, result, onDone }: Props) {
         <div>
           <div style={{ fontSize: 11, color: "var(--tx2)", marginBottom: 8 }}>Implementation error confirmed. Rewrite node based on failed checklist items.</div>
           <button className="btn btn-pri" onClick={() => void onRewrite()} disabled={rewrite.isPending}>
-            {rewrite.isPending ? <Spinner /> : "rewrite node"}
+            {rewrite.isPending && <Spinner />}rewrite node
           </button>
         </div>
       )}
@@ -113,7 +113,7 @@ export function StepDiagnosis({ nodeId, result, onDone }: Props) {
           ))}
           <div style={{ fontSize: 11, color: "var(--tx2)", margin: "8px 0" }}>Design error confirmed. Trigger upward traversal to invalidate origin nodes.</div>
           <button className="btn btn-pri" onClick={() => void onTraverse()} disabled={traverse.isPending} style={{ borderColor: "var(--failed)", color: "var(--failed)", background: "var(--bg-failed)" }}>
-            {traverse.isPending ? <Spinner /> : "trigger upward traversal"}
+            {traverse.isPending && <Spinner />}trigger upward traversal
           </button>
         </div>
       )}

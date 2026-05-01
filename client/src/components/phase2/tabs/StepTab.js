@@ -17,6 +17,7 @@ export function StepTab({ depth, step, status, nodes, states, definition }) {
     const [exitCheck, setExitCheck] = useState(null);
     const [diagnosis, setDiagnosis] = useState(null);
     const [diagnosing, setDiagnosing] = useState(null);
+    const [proposedNodes, setProposedNodes] = useState([]);
     const diagnoseNode = useDiagnoseNode();
     const { pushToast } = useToast();
     // Fetch exit-check when layer locks
@@ -31,6 +32,11 @@ export function StepTab({ depth, step, status, nodes, states, definition }) {
     useEffect(() => {
         if (step !== "validation")
             setDiagnosis(null);
+    }, [step]);
+    // Reset proposed nodes when leaving the proposals step
+    useEffect(() => {
+        if (step !== "node proposals")
+            setProposedNodes([]);
     }, [step]);
     const handleDiagnose = async (nodeId) => {
         setDiagnosing(nodeId);
@@ -55,7 +61,7 @@ export function StepTab({ depth, step, status, nodes, states, definition }) {
     if (step === "layer definition")
         return _jsx(StepLayerDefinition, { depth: depth, definition: definition });
     if (step === "node proposals")
-        return _jsx(StepNodeProposals, { depth: depth, nodes: nodes });
+        return _jsx(StepNodeProposals, { depth: depth, nodes: nodes, proposed: proposedNodes, onProposed: setProposedNodes });
     if (step === "validation") {
         if (diagnosis) {
             return (_jsx(StepDiagnosis, { nodeId: diagnosis.nodeId, result: diagnosis.result, onDone: () => setDiagnosis(null) }));

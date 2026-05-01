@@ -38,7 +38,7 @@ export function StepLeafDetermination({ depth, nodes }: { depth: number; nodes: 
       <div className="mono" style={{ fontSize: 10, color: "var(--tx2)", marginBottom: 8 }}>LEAF DETERMINATION · L{depth}</div>
       {!leafReady && (
         <button className="btn" onClick={() => void onDetermine()} disabled={determine.isPending}>
-          {determine.isPending ? <Spinner /> : "determine leaf nodes"}
+          {determine.isPending && <Spinner />}determine leaf nodes
         </button>
       )}
       {leafReady && (
@@ -67,7 +67,7 @@ export function StepLeafDetermination({ depth, nodes }: { depth: number; nodes: 
             })}
           </div>
           <button className="btn btn-pri" style={{ marginTop: 8 }} onClick={() => void onConfirm()} disabled={confirm.isPending}>
-            {confirm.isPending ? <Spinner /> : "confirm"}
+            {confirm.isPending && <Spinner />}confirm
           </button>
         </>
       )}

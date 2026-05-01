@@ -56,7 +56,7 @@ export function StepCollectiveCheck({ depth, parentIds }: { depth: number; paren
 
       {!coverage && (
         <button className="btn" onClick={() => void run()} disabled={collective.isPending}>
-          {collective.isPending ? <Spinner /> : "run collective check"}
+          {collective.isPending && <Spinner />}run collective check
         </button>
       )}
 
@@ -86,7 +86,7 @@ export function StepCollectiveCheck({ depth, parentIds }: { depth: number; paren
               ))}
               {queued.size > 0 && (
                 <button className="btn btn-pri" onClick={() => void handleApprove()} disabled={approve.isPending}>
-                  {approve.isPending ? <Spinner /> : "approve re-proposals"}
+                  {approve.isPending && <Spinner />}approve re-proposals
                 </button>
               )}
             </div>
@@ -97,7 +97,7 @@ export function StepCollectiveCheck({ depth, parentIds }: { depth: number; paren
           )}
 
           <button className="btn" onClick={() => void run()} disabled={collective.isPending}>
-            {collective.isPending ? <Spinner /> : "re-run collective check"}
+            {collective.isPending ? <><Spinner />working…</> : "re-run collective check"}
           </button>
         </div>
       )}
